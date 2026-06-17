@@ -31,7 +31,6 @@ const iAmReady = computed(() => !!me.value?.is_voted)
 const readyCount = computed(() => users.value.filter((u) => u.is_voted).length)
 
 const membersOf = (teamId: string) => users.value.filter((u) => u.team_id === teamId)
-const unassigned = computed(() => users.value.filter((u) => !u.team_id))
 const isLiarGame = computed(() => room.value?.game_type === GAME_TYPES.LIAR)
 // 준비 인원이 기준 인원 수를 충족하면 게임 시작 버튼이 활성화된다.
 const canStart = computed(() => isLiarGame.value && readyCount.value >= READY_THRESHOLD)
@@ -49,7 +48,23 @@ const fetchData = async () => {
     supabase.from('team').select('*').order('team_name'),
     supabase.from('user').select('*').eq('room_id', roomId)
   ])
-  users.value = userData || []
+  
+  const currentUsers = userData || []
+  
+  // 내 정보 찾기 및 자동 팀 배정
+  const myData = currentUsers.find(u => u.id === authStore.user?.id)
+  if (myData && !myData.team_id) {
+    const { PREFERRED_TEAM_KEY } = await import('../constants')
+    const preferred = localStorage.getItem(PREFERRED_TEAM_KEY)
+    if (preferred) {
+      const teamId = `team_${preferred}`
+      await supabase.from('user').update({ team_id: teamId }).eq('id', authStore.user?.id)
+      myData.team_id = teamId
+      if (authStore.user) authStore.user.team_id = teamId
+    }
+  }
+
+  users.value = currentUsers
   
   // 방에 이미 소속된 유저인지 확인
   const isMember = users.value.some(u => u.id === authStore.user?.id)
@@ -68,15 +83,7 @@ const fetchData = async () => {
   }
 
   teams.value = teamData || []
-  users.value = userData || []
   loading.value = false
-}
-
-const switchTeam = async (teamId: string) => {
-  if (!authStore.user) return
-  await supabase.from('user').update({ team_id: teamId }).eq('id', authStore.user.id)
-  authStore.user.team_id = teamId
-  fetchData()
 }
 
 const toggleReady = async () => {
@@ -243,28 +250,13 @@ onUnmounted(() => {
             </li>
           </ul>
 
-          <button
-            v-if="me?.team_id !== team.id"
-            @click="switchTeam(team.id)"
-            class="w-full py-2 text-sm font-bold text-indigo-600 bg-indigo-50 hover:bg-indigo-100 rounded-xl transition-colors"
-          >
-            이 팀으로 이동
-          </button>
           <div
-            v-else
-            class="w-full py-2 text-sm font-bold text-center text-indigo-400 bg-indigo-50/50 rounded-xl"
+            v-if="me?.team_id === team.id"
+            class="w-full py-2 text-sm font-bold text-center text-indigo-600 bg-indigo-50 rounded-xl"
           >
             내 팀
           </div>
         </div>
-      </div>
-
-      <!-- 팀 미배정 안내 -->
-      <div
-        v-if="unassigned.length > 0"
-        class="bg-amber-50 border border-amber-200 text-amber-700 text-sm rounded-xl p-3 mb-6"
-      >
-        팀이 없는 인원 {{ unassigned.length }}명이 있습니다. 위에서 팀을 선택해주세요.
       </div>
 
       <!-- 준비 완료 -->

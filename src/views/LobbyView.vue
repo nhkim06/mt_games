@@ -22,6 +22,50 @@ const loading = ref(false)
 const showCreateModal = ref(false)
 const newRoomType = ref<string>(GAME_TYPES.LIAR)
 const joining = ref(false)
+const showSettingsModal = ref(false)
+const settingsName = ref('')
+const settingsTeam = ref('')
+const savingSettings = ref(false)
+
+const openSettings = () => {
+  settingsName.value = authStore.user?.name || ''
+  settingsTeam.value = localStorage.getItem(PREFERRED_TEAM_KEY) || TEAM_NAMES[0]
+  showSettingsModal.value = true
+}
+
+const saveSettings = async () => {
+  if (!authStore.user || !settingsName.value.trim() || savingSettings.value) return
+  savingSettings.value = true
+  try {
+    const { data, error } = await supabase
+      .from('user')
+      .update({ name: settingsName.value.trim() })
+      .eq('id', authStore.user.id)
+      .select()
+      .single()
+    
+    if (error) throw error
+
+    localStorage.setItem(PREFERRED_TEAM_KEY, settingsTeam.value)
+    
+    // 현재 방에 참여 중이라면 팀 정보도 즉시 업데이트 (방 입장 시 자동 배정 로직과 일치)
+    if (authStore.user.room_id) {
+      await supabase
+        .from('user')
+        .update({ team_id: `team_${settingsTeam.value}` })
+        .eq('id', authStore.user.id)
+    }
+
+    await authStore.refreshProfile()
+    showSettingsModal.value = false
+    alert('설정이 저장되었습니다.')
+  } catch (e) {
+    console.error(e)
+    alert('설정 저장 중 오류가 발생했습니다.')
+  } finally {
+    savingSettings.value = false
+  }
+}
 
 const fetchRooms = async () => {
   loading.value = true
@@ -156,6 +200,16 @@ onUnmounted(() => {
         <span class="hidden sm:inline text-gray-600 font-medium"
           >{{ authStore.user?.name }} 님</span
         >
+        <button
+          @click="openSettings"
+          class="p-2 text-gray-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-xl transition-all"
+          title="설정"
+        >
+          <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+          </svg>
+        </button>
         <button
           v-if="authStore.isAdmin"
           @click="router.push({ name: 'admin' })"
@@ -322,6 +376,63 @@ onUnmounted(() => {
             class="flex-1 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold transition-colors shadow-sm disabled:opacity-50"
           >
             생성
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 설정 모달 -->
+    <div
+      v-if="showSettingsModal"
+      class="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50"
+    >
+      <div class="bg-white rounded-3xl p-8 max-w-sm w-full animate-in zoom-in-95">
+        <h2 class="text-2xl font-black mb-6">내 설정</h2>
+
+        <div class="space-y-6 mb-8">
+          <div>
+            <label class="block text-sm font-bold text-gray-500 mb-2 uppercase tracking-wider">이름</label>
+            <input
+              v-model="settingsName"
+              type="text"
+              maxlength="12"
+              class="w-full px-4 py-3 bg-gray-50 rounded-xl border-2 border-transparent focus:border-indigo-500 outline-none font-bold"
+            />
+          </div>
+
+          <div>
+            <label class="block text-sm font-bold text-gray-500 mb-2 uppercase tracking-wider">선호 팀</label>
+            <div class="grid grid-cols-2 gap-2">
+              <button
+                v-for="team in TEAM_NAMES"
+                :key="team"
+                @click="settingsTeam = team"
+                :class="[
+                  'py-3 border-2 rounded-xl font-bold transition-all uppercase',
+                  settingsTeam === team
+                    ? 'border-indigo-600 bg-indigo-50 text-indigo-600'
+                    : 'border-gray-100 text-gray-400'
+                ]"
+              >
+                {{ team }}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="flex gap-3">
+          <button
+            @click="showSettingsModal = false"
+            class="flex-1 py-3 bg-gray-100 hover:bg-gray-200 rounded-xl font-bold transition-colors"
+          >
+            취소
+          </button>
+          <button
+            @click="saveSettings"
+            :disabled="savingSettings || !settingsName.trim()"
+            class="flex-1 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold transition-colors shadow-sm disabled:opacity-50"
+          >
+            {{ savingSettings ? '저장 중...' : '저장' }}
           </button>
         </div>
       </div>
