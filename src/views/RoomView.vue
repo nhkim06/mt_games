@@ -45,16 +45,28 @@ const fetchData = async () => {
   }
   room.value = roomData
 
-  // 게임이 시작되면 게임 화면으로 이동
+  const [{ data: teamData }, { data: userData }] = await Promise.all([
+    supabase.from('team').select('*').eq('room_id', roomId).order('team_name'),
+    supabase.from('user').select('*').eq('room_id', roomId)
+  ])
+  users.value = userData || []
+  
+  // 방에 이미 소속된 유저인지 확인
+  const isMember = users.value.some(u => u.id === authStore.user?.id)
+
+  // 게임이 시작된 방에 비멤버가 접근하면 로비로 튕김
+  if (roomData.status !== ROOM_STATUS.WAITING && !isMember) {
+    alert('이미 게임이 진행 중이거나 종료된 방입니다.')
+    router.replace({ name: 'lobby' })
+    return
+  }
+
+  // 기존 멤버인데 게임 중이면 게임 화면으로 이동
   if (roomData.status === ROOM_STATUS.PLAYING || roomData.status === ROOM_STATUS.RESULT) {
     router.replace({ name: 'game', params: { id: roomId } })
     return
   }
 
-  const [{ data: teamData }, { data: userData }] = await Promise.all([
-    supabase.from('team').select('*').eq('room_id', roomId).order('team_name'),
-    supabase.from('user').select('*').eq('room_id', roomId)
-  ])
   teams.value = teamData || []
   users.value = userData || []
   loading.value = false

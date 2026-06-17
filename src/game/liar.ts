@@ -113,9 +113,12 @@ export function computeScoreDeltas(results: TeamResult[]): Record<string, number
 
 /** 상대팀에게 검거당해 제시어를 맞춰야 하는 라이어들의 userId 목록. */
 export function caughtLiarIds(results: TeamResult[]): string[] {
-  return results
-    .filter((r) => r.oppCaught && r.oppLiarId)
-    .map((r) => r.oppLiarId as string)
+  return results.filter((r) => r.oppCaught && r.oppLiarId).map((r) => r.oppLiarId as string)
+}
+
+/** 모든 라이어의 userId 목록. */
+export function getAllLiarIds(users: UserRow[]): string[] {
+  return users.filter((u) => u.role === ROLES.LIAR).map((u) => u.id)
 }
 
 /** 어떤 라이어도 검거되지 않았는지(=라운드 재진행) */

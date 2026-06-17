@@ -9,6 +9,7 @@ import {
   computeResults,
   computeScoreDeltas,
   caughtLiarIds,
+  getAllLiarIds,
   noLiarCaught,
   assignRoles,
   pickCategoryAndWord,
@@ -48,9 +49,9 @@ const userName = (id: string | null) => users.value.find((u) => u.id === id)?.na
 
 const results = computed(() => computeResults(teams.value, users.value, votes.value))
 const myResult = computed(() => results.value.find((r) => r.teamId === me.value?.team_id) ?? null)
-const allCaughtLiarIds = computed(() => caughtLiarIds(results.value))
-const iAmCaughtLiar = computed(
-  () => myRole.value === ROLES.LIAR && !!me.value && allCaughtLiarIds.value.includes(me.value.id)
+const allLiarIds = computed(() => getAllLiarIds(users.value))
+const iMustGuess = computed(
+  () => myRole.value === ROLES.LIAR && !!me.value && allLiarIds.value.includes(me.value.id)
 )
 const nobodyCaught = computed(() => results.value.length > 0 && noLiarCaught(results.value))
 
@@ -61,13 +62,18 @@ const guessedLiarIds = computed(() =>
     .map((v) => v.voter_id as string)
 )
 const iHaveGuessed = computed(() => !!me.value && guessedLiarIds.value.includes(me.value.id))
-// 아직 제시어를 제출하지 않은(검거된) 라이어
+// 아직 제시어를 제출하지 않은 라이어
 const pendingLiarIds = computed(() =>
-  allCaughtLiarIds.value.filter((id) => !guessedLiarIds.value.includes(id))
+  allLiarIds.value.filter((id) => !guessedLiarIds.value.includes(id))
 )
-const submittedCount = computed(() => allCaughtLiarIds.value.length - pendingLiarIds.value.length)
-// 검거된 라이어가 없거나, 검거된 라이어가 모두 제출해야 다음 라운드로 진행 가능
-const canAdvance = computed(() => nobodyCaught.value || pendingLiarIds.value.length === 0)
+const submittedCount = computed(() => allLiarIds.value.length - pendingLiarIds.value.length)
+// 모든 라이어가 제출해야 다음 라운드로 진행 가능
+const canAdvance = computed(() => pendingLiarIds.value.length === 0)
+
+const bgClass = computed(() => {
+  if (room.value?.status !== ROOM_STATUS.RESULT) return ''
+  return nobodyCaught.value ? 'bg-rose-100' : 'bg-green-100'
+})
 
 const fetchData = async () => {
   const { data: roomData } = await supabase.from('room').select('*').eq('id', roomId).maybeSingle()
@@ -248,55 +254,56 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="flex-1 flex flex-col p-6 max-w-2xl mx-auto w-full">
-    <div v-if="loading" class="flex-1 flex items-center justify-center py-20">
-      <div class="animate-spin rounded-full h-10 w-10 border-b-2 border-indigo-600"></div>
-    </div>
+  <div :class="['flex-1 flex flex-col w-full transition-colors duration-500', bgClass]">
+    <div class="flex-1 flex flex-col p-6 max-w-2xl mx-auto w-full">
+      <div v-if="loading" class="flex-1 flex items-center justify-center py-20">
+        <div class="animate-spin rounded-full h-10 w-10 border-b-2 border-indigo-600"></div>
+      </div>
 
-    <template v-else>
-      <!-- 헤더 -->
-      <div class="bg-white rounded-2xl shadow-sm border p-5 mb-6 flex justify-between items-center">
-        <div>
-          <span
-            class="text-xs font-black text-indigo-600 bg-indigo-50 px-2 py-1 rounded uppercase block w-fit mb-1"
-            >ROUND {{ room.current_round }}</span
+      <template v-else>
+        <!-- 헤더 -->
+        <div class="bg-white rounded-2xl shadow-sm border p-5 mb-6 flex justify-between items-center">
+          <div>
+            <span
+              class="text-xs font-black text-indigo-600 bg-indigo-50 px-2 py-1 rounded uppercase block w-fit mb-1"
+              >ROUND {{ room.current_round }}</span
+            >
+            <h1 class="text-xl font-black text-gray-800">카테고리 · {{ room.category }}</h1>
+          </div>
+          <button
+            @click="resetRoom"
+            class="text-xs font-bold text-red-400 hover:text-red-600 border border-red-100 hover:border-red-200 px-2 py-1.5 rounded-lg transition-all"
           >
-          <h1 class="text-xl font-black text-gray-800">카테고리 · {{ room.category }}</h1>
+            리셋
+          </button>
         </div>
-        <button
-          @click="resetRoom"
-          class="text-xs font-bold text-red-400 hover:text-red-600 border border-red-100 hover:border-red-200 px-2 py-1.5 rounded-lg transition-all"
-        >
-          리셋
-        </button>
-      </div>
 
-      <!-- 역할 카드 -->
-      <div
-        :class="[
-          'rounded-3xl shadow-xl p-8 mb-8 text-center text-white',
-          myRole === ROLES.LIAR ? 'bg-rose-600' : 'bg-indigo-600'
-        ]"
-      >
-        <h2 class="text-sm opacity-80 mb-2">당신의 역할</h2>
-        <template v-if="myRole === ROLES.LIAR">
-          <h3 class="text-4xl font-black mb-4 tracking-tighter">라이어 🤫</h3>
-          <p class="text-rose-100 leading-relaxed text-sm">
-            제시어를 모르는 척 연기하세요.<br />들켜도 제시어를 맞히면 역전할 수 있습니다!
-          </p>
-        </template>
-        <template v-else>
-          <h3 class="text-4xl font-black mb-3 tracking-tighter">시민 🙂</h3>
-          <p class="text-indigo-100 text-sm">
-            제시어는
-            <span class="bg-white text-indigo-600 px-2 py-0.5 rounded font-black mx-1">{{
-              room.secret_word
-            }}</span>
-            입니다.
-          </p>
-          <p class="text-indigo-200 text-xs mt-2 opacity-80">라이어에게 들키지 않게 대화하세요.</p>
-        </template>
-      </div>
+        <!-- 역할 카드 -->
+        <div
+          :class="[
+            'rounded-3xl shadow-xl p-8 mb-8 text-center text-white',
+            myRole === ROLES.LIAR ? 'bg-rose-600' : 'bg-indigo-600'
+          ]"
+        >
+          <h2 class="text-sm opacity-80 mb-2">당신의 역할</h2>
+          <template v-if="myRole === ROLES.LIAR">
+            <h3 class="text-4xl font-black mb-4 tracking-tighter">라이어 🤫</h3>
+            <p class="text-rose-100 leading-relaxed text-sm">
+              제시어를 모르는 척 연기하세요.<br />들켜도 제시어를 맞히면 역전할 수 있습니다!
+            </p>
+          </template>
+          <template v-else>
+            <h3 class="text-4xl font-black mb-3 tracking-tighter">시민 🙂</h3>
+            <p class="text-indigo-100 text-sm">
+              제시어는
+              <span class="bg-white text-indigo-600 px-2 py-0.5 rounded font-black mx-1">{{
+                room.secret_word
+              }}</span>
+              입니다.
+            </p>
+            <p class="text-indigo-200 text-xs mt-2 opacity-80">라이어에게 들키지 않게 대화하세요.</p>
+          </template>
+        </div>
 
       <!-- 진행: 라이어 지목 투표 -->
       <div v-if="room.status === ROOM_STATUS.PLAYING">
@@ -407,17 +414,19 @@ onUnmounted(() => {
           class="bg-amber-50 border border-amber-200 text-amber-700 rounded-2xl p-5 text-center font-bold"
         >
           두 팀 다 상대팀 라이어를 맞추지 못했습니다!<br />
-          <span class="text-sm font-medium">다음 라운드로 넘어갑니다.</span>
+          <span class="text-sm font-medium">라이어들이 제시어를 맞히고 있습니다.</span>
         </div>
 
-        <!-- 라이어가 검거된 경우: 제시어 맞히기 -->
-        <template v-else>
-          <!-- 내가 검거당한 라이어 -->
+        <!-- 제시어 맞히기 -->
+        <div class="mt-4">
+          <!-- 내가 라이어인 경우 -->
           <div
-            v-if="iAmCaughtLiar"
+            v-if="iMustGuess"
             class="bg-rose-50 border-2 border-rose-200 rounded-2xl p-6 text-center"
           >
-            <h3 class="text-lg font-black text-rose-600 mb-2">정체가 들켰습니다!</h3>
+            <h3 class="text-lg font-black text-rose-600 mb-2">
+              {{ myResult?.oppCaught ? '정체가 들켰습니다!' : '정체를 숨기는 데 성공했습니다!' }}
+            </h3>
             <p class="text-rose-500 text-sm mb-4">
               제시어를 제출해야 다음 라운드로 넘어갑니다. 맞히면 +30점!
             </p>
@@ -451,23 +460,23 @@ onUnmounted(() => {
 
           <!-- 일반 유저(또는 이미 제출한 라이어): 라이어 제출 대기 안내 -->
           <div v-else class="bg-white border rounded-2xl p-6 text-center">
-            <p class="text-gray-700 font-bold mb-1">검거된 라이어가 제시어를 제출하는 중입니다…</p>
+            <p class="text-gray-700 font-bold mb-1">라이어가 제시어를 제출하는 중입니다…</p>
             <p class="text-gray-400 text-sm">
-              제출 {{ submittedCount }} / {{ allCaughtLiarIds.length }} · 모두 제출하면 다음 라운드로
+              제출 {{ submittedCount }} / {{ allLiarIds.length }} · 모두 제출하면 다음 라운드로
               넘어갑니다.
             </p>
           </div>
-        </template>
+        </div>
 
         <button
           @click="nextRound"
           :disabled="advancing || !canAdvance"
-          class="w-full py-4 bg-indigo-600 hover:bg-indigo-700 text-white text-lg font-black rounded-2xl transition-colors shadow-lg shadow-indigo-200 active:scale-95 disabled:bg-gray-200 disabled:text-gray-400 disabled:shadow-none disabled:cursor-not-allowed"
+          class="w-full py-4 bg-indigo-600 hover:bg-indigo-700 text-white text-lg font-black rounded-2xl transition-colors shadow-lg shadow-indigo-200 active:scale-95 disabled:bg-gray-200 disabled:text-gray-400 disabled:shadow-none disabled:cursor-not-allowed mt-4"
         >
           다음 라운드
         </button>
         <p v-if="!canAdvance" class="text-center text-xs text-amber-600 font-bold -mt-2">
-          검거된 라이어 {{ pendingLiarIds.length }}명이 아직 제시어를 제출하지 않았습니다.
+          라이어 {{ pendingLiarIds.length }}명이 아직 제시어를 제출하지 않았습니다.
         </p>
       </div>
 
@@ -509,4 +518,5 @@ onUnmounted(() => {
       </div>
     </template>
   </div>
+</div>
 </template>

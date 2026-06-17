@@ -237,14 +237,21 @@ onUnmounted(() => {
       </button>
     </div>
 
-    <div v-else class="grid grid-cols-1 sm:grid-cols-2 gap-4">
       <button
         v-for="room in rooms"
         :key="room.id"
-        :disabled="joining || room.status === 'FINISHED'"
-        class="text-left bg-white p-6 rounded-2xl shadow-sm border hover:border-indigo-400 hover:shadow-md transition-all disabled:opacity-50 disabled:cursor-not-allowed group"
+        :disabled="joining || room.status !== ROOM_STATUS.WAITING"
+        class="text-left bg-white p-6 rounded-2xl shadow-sm border hover:border-indigo-400 hover:shadow-md transition-all disabled:opacity-60 disabled:bg-gray-50 disabled:cursor-not-allowed group relative overflow-hidden"
         @click="joinRoom(room.id)"
       >
+        <div
+          v-if="room.status !== ROOM_STATUS.WAITING"
+          class="absolute inset-0 bg-gray-900/5 flex items-center justify-center z-10"
+        >
+          <span class="bg-gray-800 text-white text-xs font-black px-3 py-1 rounded-full uppercase tracking-widest shadow-lg">
+            {{ room.status === ROOM_STATUS.FINISHED ? '종료됨' : '진행 중' }}
+          </span>
+        </div>
         <div class="flex justify-between items-start mb-4">
           <span
             :class="[
