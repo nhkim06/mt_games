@@ -197,32 +197,38 @@ const nextRound = async () => {
   if (advancing.value || !canAdvance.value) return
   advancing.value = true
   try {
+    const nextStatus = nobodyCaught.value ? ROOM_STATUS.PLAYING : ROOM_STATUS.FINISHED
+
     const { data: claimed } = await supabase
       .from('room')
-      .update({ status: ROOM_STATUS.PLAYING })
+      .update({ status: nextStatus })
       .eq('id', roomId)
       .eq('status', ROOM_STATUS.RESULT)
       .select()
 
     if (claimed && claimed.length > 0) {
-      const { category, secret_word } = pickCategoryAndWord()
-      const roleUpdates = assignRoles(teams.value, users.value)
-      await Promise.all(
-        roleUpdates.map((u) =>
-          supabase.from('user').update({ role: u.role, is_voted: false }).eq('id', u.id)
+      if (nextStatus === ROOM_STATUS.PLAYING) {
+        const { category, secret_word } = pickCategoryAndWord()
+        const roleUpdates = assignRoles(teams.value, users.value)
+        await Promise.all(
+          roleUpdates.map((u) =>
+            supabase.from('user').update({ role: u.role, is_voted: false }).eq('id', u.id)
+          )
         )
-      )
-      await supabase.from('votes').delete().eq('room_id', roomId)
-      await supabase
-        .from('room')
-        .update({ category, secret_word, current_round: room.value.current_round + 1 })
-        .eq('id', roomId)
+        await supabase.from('votes').delete().eq('room_id', roomId)
+        await supabase
+          .from('room')
+          .update({ category, secret_word, current_round: room.value.current_round + 1 })
+          .eq('id', roomId)
+      }
     }
     // 로컬 입력 상태 초기화
-    selection.value = { own: '', opp: '' }
-    guessInput.value = ''
-    guessResult.value = ''
-    await fetchData()
+    if (nextStatus === ROOM_STATUS.PLAYING) {
+      selection.value = { own: '', opp: '' }
+      guessInput.value = ''
+      guessResult.value = ''
+      await fetchData()
+    }
   } finally {
     advancing.value = false
   }
@@ -238,7 +244,18 @@ const resetRoom = async () => {
   router.replace({ name: 'lobby' })
 }
 
-const goLobby = () => router.replace({ name: 'lobby' })
+const goLobby = async () => {
+  if (authStore.user) {
+    await supabase
+      .from('user')
+      .update({ room_id: null, team_id: null, role: null, is_voted: false })
+      .eq('id', authStore.user.id)
+    authStore.user.room_id = null
+    authStore.user.team_id = undefined
+    authStore.user.role = null
+  }
+  router.replace({ name: 'lobby' })
+}
 
 let unsubscribe: (() => void) | null = null
 let poll: ReturnType<typeof setInterval> | null = null
@@ -473,7 +490,7 @@ onUnmounted(() => {
           :disabled="advancing || !canAdvance"
           class="w-full py-4 bg-indigo-600 hover:bg-indigo-700 text-white text-lg font-black rounded-2xl transition-colors shadow-lg shadow-indigo-200 active:scale-95 disabled:bg-gray-200 disabled:text-gray-400 disabled:shadow-none disabled:cursor-not-allowed mt-4"
         >
-          다음 라운드
+          {{ nobodyCaught ? '다음 라운드' : '게임 종료' }}
         </button>
         <p v-if="!canAdvance" class="text-center text-xs text-amber-600 font-bold -mt-2">
           라이어 {{ pendingLiarIds.length }}명이 아직 제시어를 제출하지 않았습니다.
