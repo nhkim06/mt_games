@@ -29,7 +29,7 @@ const loading = ref(true)
 const selection = ref<{ own: string; opp: string }>({ own: '', opp: '' })
 const submitting = ref(false)
 const guessInput = ref('')
-const guessSubmitted = ref(false)
+const submittingGuess = ref(false)
 const guessResult = ref<'correct' | 'wrong' | ''>('')
 const advancing = ref(false)
 
@@ -53,6 +53,21 @@ const iAmCaughtLiar = computed(
   () => myRole.value === ROLES.LIAR && !!me.value && allCaughtLiarIds.value.includes(me.value.id)
 )
 const nobodyCaught = computed(() => results.value.length > 0 && noLiarCaught(results.value))
+
+// 제시어를 제출한 라이어 목록(votes 테이블의 LIAR_GUESS 기록 기반, 모든 클라이언트 공유)
+const guessedLiarIds = computed(() =>
+  votes.value
+    .filter((v) => v.target_type === TARGET_TYPES.LIAR_GUESS)
+    .map((v) => v.voter_id as string)
+)
+const iHaveGuessed = computed(() => !!me.value && guessedLiarIds.value.includes(me.value.id))
+// 아직 제시어를 제출하지 않은(검거된) 라이어
+const pendingLiarIds = computed(() =>
+  allCaughtLiarIds.value.filter((id) => !guessedLiarIds.value.includes(id))
+)
+const submittedCount = computed(() => allCaughtLiarIds.value.length - pendingLiarIds.value.length)
+// 검거된 라이어가 없거나, 검거된 라이어가 모두 제출해야 다음 라운드로 진행 가능
+const canAdvance = computed(() => nobodyCaught.value || pendingLiarIds.value.length === 0)
 
 const fetchData = async () => {
   const { data: roomData } = await supabase.from('room').select('*').eq('id', roomId).maybeSingle()
@@ -137,23 +152,43 @@ const resolveIfAllVoted = async () => {
   }
 }
 
-// 라이어 제시어 정답 (+30)
+// 라이어 제시어 제출. 제출 사실을 votes 테이블에 기록(공유)하고, 정답이면 +30.
 const submitGuess = async () => {
-  if (guessSubmitted.value) return
-  const correct = normalizeWord(guessInput.value) === normalizeWord(room.value.secret_word)
-  guessSubmitted.value = true
-  guessResult.value = correct ? 'correct' : 'wrong'
-  if (correct && myTeam.value) {
-    await supabase
-      .from('team')
-      .update({ score: myTeam.value.score + 30 })
-      .eq('id', myTeam.value.id)
+  if (submittingGuess.value || iHaveGuessed.value || !me.value) return
+  submittingGuess.value = true
+  try {
+    const correct = normalizeWord(guessInput.value) === normalizeWord(room.value.secret_word)
+    guessResult.value = correct ? 'correct' : 'wrong'
+
+    // 제출 기록 (모든 클라이언트가 공유 → 다음 라운드 진행 가능 여부 판단)
+    await supabase.from('votes').insert({
+      room_id: roomId,
+      round: room.value.current_round,
+      voter_id: me.value.id,
+      voter_team_id: me.value.team_id,
+      target_type: TARGET_TYPES.LIAR_GUESS,
+      candidate_id: me.value.id
+    })
+
+    if (correct && myTeam.value) {
+      await supabase
+        .from('team')
+        .update({ score: myTeam.value.score + 30 })
+        .eq('id', myTeam.value.id)
+    }
+    await fetchData()
+  } catch (e) {
+    console.error(e)
+    alert('제출 중 오류가 발생했습니다.')
+  } finally {
+    submittingGuess.value = false
   }
 }
 
 // 다음 라운드: 단 한 클라이언트만 전환. 역할 재배정 + 투표 초기화.
+// 검거된 라이어가 모두 제시어를 제출하기 전에는 진행할 수 없다.
 const nextRound = async () => {
-  if (advancing.value) return
+  if (advancing.value || !canAdvance.value) return
   advancing.value = true
   try {
     const { data: claimed } = await supabase
@@ -180,7 +215,6 @@ const nextRound = async () => {
     // 로컬 입력 상태 초기화
     selection.value = { own: '', opp: '' }
     guessInput.value = ''
-    guessSubmitted.value = false
     guessResult.value = ''
     await fetchData()
   } finally {
@@ -384,8 +418,10 @@ onUnmounted(() => {
             class="bg-rose-50 border-2 border-rose-200 rounded-2xl p-6 text-center"
           >
             <h3 class="text-lg font-black text-rose-600 mb-2">정체가 들켰습니다!</h3>
-            <p class="text-rose-500 text-sm mb-4">제시어를 맞히면 +30점으로 역전할 수 있어요.</p>
-            <template v-if="!guessSubmitted">
+            <p class="text-rose-500 text-sm mb-4">
+              제시어를 제출해야 다음 라운드로 넘어갑니다. 맞히면 +30점!
+            </p>
+            <template v-if="!iHaveGuessed">
               <input
                 v-model="guessInput"
                 type="text"
@@ -395,9 +431,10 @@ onUnmounted(() => {
               />
               <button
                 @click="submitGuess"
-                class="w-full py-3 bg-rose-600 hover:bg-rose-700 text-white font-black rounded-xl transition-colors"
+                :disabled="submittingGuess"
+                class="w-full py-3 bg-rose-600 hover:bg-rose-700 text-white font-black rounded-xl transition-colors disabled:opacity-50"
               >
-                정답 제출
+                {{ submittingGuess ? '제출 중...' : '제시어 제출' }}
               </button>
             </template>
             <div v-else>
@@ -412,20 +449,26 @@ onUnmounted(() => {
             </div>
           </div>
 
-          <!-- 일반 유저: 라이어 입력 대기 안내 -->
+          <!-- 일반 유저(또는 이미 제출한 라이어): 라이어 제출 대기 안내 -->
           <div v-else class="bg-white border rounded-2xl p-6 text-center">
-            <p class="text-gray-700 font-bold mb-1">검거된 라이어가 제시어를 맞히는 중입니다…</p>
-            <p class="text-gray-400 text-sm">라이어가 맞히면 해당 팀이 +30점을 얻습니다.</p>
+            <p class="text-gray-700 font-bold mb-1">검거된 라이어가 제시어를 제출하는 중입니다…</p>
+            <p class="text-gray-400 text-sm">
+              제출 {{ submittedCount }} / {{ allCaughtLiarIds.length }} · 모두 제출하면 다음 라운드로
+              넘어갑니다.
+            </p>
           </div>
         </template>
 
         <button
           @click="nextRound"
-          :disabled="advancing"
-          class="w-full py-4 bg-indigo-600 hover:bg-indigo-700 text-white text-lg font-black rounded-2xl transition-colors shadow-lg shadow-indigo-200 active:scale-95 disabled:opacity-50"
+          :disabled="advancing || !canAdvance"
+          class="w-full py-4 bg-indigo-600 hover:bg-indigo-700 text-white text-lg font-black rounded-2xl transition-colors shadow-lg shadow-indigo-200 active:scale-95 disabled:bg-gray-200 disabled:text-gray-400 disabled:shadow-none disabled:cursor-not-allowed"
         >
           다음 라운드
         </button>
+        <p v-if="!canAdvance" class="text-center text-xs text-amber-600 font-bold -mt-2">
+          검거된 라이어 {{ pendingLiarIds.length }}명이 아직 제시어를 제출하지 않았습니다.
+        </p>
       </div>
 
       <!-- 종료 -->

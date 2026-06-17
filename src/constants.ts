@@ -30,10 +30,12 @@ export const ROLES = {
   CITIZEN: 'CITIZEN'
 } as const
 
-// 라이어 지목 대상
+// 라이어 지목 대상 / 투표 종류
 export const TARGET_TYPES = {
   OWN_TEAM: 'OWN_TEAM',
-  OPPONENT_TEAM: 'OPPONENT_TEAM'
+  OPPONENT_TEAM: 'OPPONENT_TEAM',
+  // 검거된 라이어의 제시어 제출 기록 (votes 테이블에 공유 상태로 저장)
+  LIAR_GUESS: 'LIAR_GUESS'
 } as const
 
 // 기본 팀 구성
