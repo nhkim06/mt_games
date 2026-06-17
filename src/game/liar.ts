@@ -1,0 +1,152 @@
+import { ROLES, TARGET_TYPES, SCORES } from '../constants'
+import { GAME_WORDS } from '../data/words'
+
+export interface UserRow {
+  id: string
+  name: string
+  team_id: string | null
+  role: string | null
+  is_voted?: boolean
+  room_id?: string | null
+}
+
+export interface TeamRow {
+  id: string
+  team_name: string
+  score: number
+  room_id: string | null
+}
+
+export interface VoteRow {
+  voter_id?: string | null
+  voter_team_id: string | null
+  target_type: string
+  candidate_id: string | null
+}
+
+/** 다수결로 가장 많이 지목된 후보를 반환. 동률/무투표면 null. */
+function majority(candidateIds: (string | null)[]): string | null {
+  const counts = new Map<string, number>()
+  for (const id of candidateIds) {
+    if (!id) continue
+    counts.set(id, (counts.get(id) ?? 0) + 1)
+  }
+  let best: string | null = null
+  let bestN = 0
+  let tie = false
+  for (const [id, n] of counts) {
+    if (n > bestN) {
+      best = id
+      bestN = n
+      tie = false
+    } else if (n === bestN) {
+      tie = true
+    }
+  }
+  return tie ? null : best
+}
+
+export interface TeamResult {
+  teamId: string
+  oppTeamId: string | null
+  /** 우리팀이 지목한 "우리팀 라이어" */
+  ownDesignatedId: string | null
+  ownLiarId: string | null
+  ownCaught: boolean
+  /** 우리팀이 지목한 "상대팀 라이어" */
+  oppDesignatedId: string | null
+  oppLiarId: string | null
+  oppCaught: boolean
+}
+
+/** 투표 결과를 팀별 관점으로 계산한다. (양 팀 2개 가정) */
+export function computeResults(teams: TeamRow[], users: UserRow[], votes: VoteRow[]): TeamResult[] {
+  return teams.map((team) => {
+    const oppTeam = teams.find((t) => t.id !== team.id) ?? null
+    const ownLiar = users.find((u) => u.team_id === team.id && u.role === ROLES.LIAR) ?? null
+    const oppLiar = oppTeam
+      ? users.find((u) => u.team_id === oppTeam.id && u.role === ROLES.LIAR) ?? null
+      : null
+
+    const ownDesignatedId = majority(
+      votes
+        .filter((v) => v.voter_team_id === team.id && v.target_type === TARGET_TYPES.OWN_TEAM)
+        .map((v) => v.candidate_id)
+    )
+    const oppDesignatedId = majority(
+      votes
+        .filter((v) => v.voter_team_id === team.id && v.target_type === TARGET_TYPES.OPPONENT_TEAM)
+        .map((v) => v.candidate_id)
+    )
+
+    return {
+      teamId: team.id,
+      oppTeamId: oppTeam?.id ?? null,
+      ownDesignatedId,
+      ownLiarId: ownLiar?.id ?? null,
+      ownCaught: !!ownLiar && ownDesignatedId === ownLiar.id,
+      oppDesignatedId,
+      oppLiarId: oppLiar?.id ?? null,
+      oppCaught: !!oppLiar && oppDesignatedId === oppLiar.id
+    }
+  })
+}
+
+/**
+ * 검거 점수(+10, +20) 산정. 라이어 제시어 정답(+30)은 라이어 입력 시점에 별도로 부여.
+ * - 우리팀 라이어 검거: +10
+ * - 우리팀만 상대팀 라이어 검거: +20 (두 팀 모두 상대 라이어를 맞추면 0점)
+ */
+export function computeScoreDeltas(results: TeamResult[]): Record<string, number> {
+  const deltas: Record<string, number> = {}
+  for (const r of results) deltas[r.teamId] = 0
+
+  for (const r of results) {
+    if (r.ownCaught) deltas[r.teamId] += SCORES.OWN_LIAR
+
+    const oppResult = results.find((x) => x.teamId === r.oppTeamId)
+    const bothCaught = r.oppCaught && !!oppResult?.oppCaught
+    if (r.oppCaught && !bothCaught) deltas[r.teamId] += SCORES.OPPONENT_LIAR_SOLO
+  }
+  return deltas
+}
+
+/** 상대팀에게 검거당해 제시어를 맞춰야 하는 라이어들의 userId 목록. */
+export function caughtLiarIds(results: TeamResult[]): string[] {
+  return results
+    .filter((r) => r.oppCaught && r.oppLiarId)
+    .map((r) => r.oppLiarId as string)
+}
+
+/** 어떤 라이어도 검거되지 않았는지(=라운드 재진행) */
+export function noLiarCaught(results: TeamResult[]): boolean {
+  return results.every((r) => !r.oppCaught)
+}
+
+/** 팀별로 1명씩 라이어를 무작위 배정한 user 업데이트 목록을 만든다. */
+export function assignRoles(teams: TeamRow[], users: UserRow[]): { id: string; role: string }[] {
+  const updates: { id: string; role: string }[] = []
+  for (const team of teams) {
+    const members = users.filter((u) => u.team_id === team.id)
+    if (members.length === 0) continue
+    const liarIdx = Math.floor(Math.random() * members.length)
+    members.forEach((m, i) => {
+      updates.push({ id: m.id, role: i === liarIdx ? ROLES.LIAR : ROLES.CITIZEN })
+    })
+  }
+  return updates
+}
+
+/** 무작위 카테고리/제시어 선택. */
+export function pickCategoryAndWord(): { category: string; secret_word: string } {
+  const categories = Object.keys(GAME_WORDS)
+  const category = categories[Math.floor(Math.random() * categories.length)]
+  const words = GAME_WORDS[category]
+  const secret_word = words[Math.floor(Math.random() * words.length)]
+  return { category, secret_word }
+}
+
+/** 제시어 비교용 정규화: 앞뒤 공백 제거 + 모든 공백 제거. */
+export function normalizeWord(s: string): string {
+  return (s || '').trim().replace(/\s+/g, '')
+}

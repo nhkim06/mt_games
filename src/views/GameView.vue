@@ -3,8 +3,17 @@ import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { supabase } from '../supabase'
 import { useAuthStore } from '../stores/auth'
-import { ROOM_STATUS, TARGET_TYPES, CATEGORIES } from '../constants'
-import { GAME_WORDS } from '../data/words'
+import { ROOM_STATUS, ROLES, TARGET_TYPES, MESSAGES } from '../constants'
+import { subscribeRoom } from '../lib/realtime'
+import {
+  computeResults,
+  computeScoreDeltas,
+  caughtLiarIds,
+  noLiarCaught,
+  assignRoles,
+  pickCategoryAndWord,
+  normalizeWord
+} from '../game/liar'
 
 const route = useRoute()
 const router = useRouter()
@@ -14,249 +23,445 @@ const roomId = route.params.id as string
 const room = ref<any>(null)
 const teams = ref<any[]>([])
 const users = ref<any[]>([])
-const myVotes = ref({ ownTeamLiar: '', opponentTeamLiar: '' })
-const hasVoted = ref(false)
+const votes = ref<any[]>([])
 const loading = ref(true)
-const resultMessage = ref('')
-const liarGuess = ref('')
 
-const fetchGameData = async () => {
-  const { data: roomData } = await supabase.from('room').select('*').eq('id', roomId).single()
-  if (!roomData) return router.push({ name: 'lobby' })
+const selection = ref<{ own: string; opp: string }>({ own: '', opp: '' })
+const submitting = ref(false)
+const guessInput = ref('')
+const guessSubmitted = ref(false)
+const guessResult = ref<'correct' | 'wrong' | ''>('')
+const advancing = ref(false)
+
+const me = computed(() => users.value.find((u) => u.id === authStore.user?.id))
+const myRole = computed(() => me.value?.role ?? authStore.user?.role)
+const hasVoted = computed(() => !!me.value?.is_voted)
+
+const myTeam = computed(() => teams.value.find((t) => t.id === me.value?.team_id))
+const opponentTeam = computed(() => teams.value.find((t) => t.id !== me.value?.team_id))
+const myTeamMembers = computed(() => users.value.filter((u) => u.team_id === me.value?.team_id))
+const opponentTeamMembers = computed(() =>
+  users.value.filter((u) => u.team_id && u.team_id !== me.value?.team_id)
+)
+
+const userName = (id: string | null) => users.value.find((u) => u.id === id)?.name ?? '지목 없음'
+
+const results = computed(() => computeResults(teams.value, users.value, votes.value))
+const myResult = computed(() => results.value.find((r) => r.teamId === me.value?.team_id) ?? null)
+const allCaughtLiarIds = computed(() => caughtLiarIds(results.value))
+const iAmCaughtLiar = computed(
+  () => myRole.value === ROLES.LIAR && !!me.value && allCaughtLiarIds.value.includes(me.value.id)
+)
+const nobodyCaught = computed(() => results.value.length > 0 && noLiarCaught(results.value))
+
+const fetchData = async () => {
+  const { data: roomData } = await supabase.from('room').select('*').eq('id', roomId).maybeSingle()
+  if (!roomData) {
+    alert('방이 초기화되었습니다. 로비로 이동합니다.')
+    router.replace({ name: 'lobby' })
+    return
+  }
   room.value = roomData
 
   if (roomData.status === ROOM_STATUS.WAITING) {
-    router.push({ name: 'room', params: { id: roomId } })
+    router.replace({ name: 'room', params: { id: roomId } })
     return
   }
 
-  const { data: teamData } = await supabase.from('team').select('*').eq('room_id', roomId)
+  const [{ data: teamData }, { data: userData }, { data: voteData }] = await Promise.all([
+    supabase.from('team').select('*').eq('room_id', roomId).order('team_name'),
+    supabase.from('user').select('*').eq('room_id', roomId),
+    supabase
+      .from('votes')
+      .select('*')
+      .eq('room_id', roomId)
+      .eq('round', roomData.current_round)
+  ])
   teams.value = teamData || []
-
-  const { data: userData } = await supabase.from('user').select('*').eq('room_id', roomId)
   users.value = userData || []
-  
-  const me = userData?.find(u => u.id === authStore.user?.id)
-  if (me) {
-    hasVoted.value = me.is_voted
-  }
-  
+  votes.value = voteData || []
   loading.value = false
+
+  if (roomData.status === ROOM_STATUS.PLAYING) await resolveIfAllVoted()
 }
-
-const myTeam = computed(() => teams.value.find(t => t.id === authStore.user?.team_id))
-const opponentTeam = computed(() => teams.value.find(t => t.id !== authStore.user?.team_id))
-
-const myTeamMembers = computed(() => users.value.filter(u => u.team_id === authStore.user?.team_id))
-const opponentTeamMembers = computed(() => users.value.filter(u => u.team_id !== authStore.user?.team_id))
 
 const submitVotes = async () => {
-  if (!myVotes.value.ownTeamLiar || !myVotes.value.opponentTeamLiar) {
-    alert('모든 지목을 완료해주세요.')
+  if (submitting.value) return
+  if (!selection.value.own || !selection.value.opp) {
+    alert('우리팀/상대팀 라이어를 모두 지목해주세요.')
     return
   }
-
-  const votes = [
-    {
+  submitting.value = true
+  try {
+    const base = {
       room_id: roomId,
       round: room.value.current_round,
       voter_id: authStore.user?.id,
-      voter_team_id: authStore.user?.team_id,
-      target_type: TARGET_TYPES.OWN_TEAM,
-      candidate_id: myVotes.value.ownTeamLiar
-    },
-    {
-      room_id: roomId,
-      round: room.value.current_round,
-      voter_id: authStore.user?.id,
-      voter_team_id: authStore.user?.team_id,
-      target_type: TARGET_TYPES.OPPONENT_TEAM,
-      candidate_id: myVotes.value.opponentTeamLiar
+      voter_team_id: me.value?.team_id
     }
-  ]
-
-  const { error } = await supabase.from('votes').insert(votes)
-  if (error) {
+    const { error } = await supabase.from('votes').insert([
+      { ...base, target_type: TARGET_TYPES.OWN_TEAM, candidate_id: selection.value.own },
+      { ...base, target_type: TARGET_TYPES.OPPONENT_TEAM, candidate_id: selection.value.opp }
+    ])
+    if (error) throw error
+    await supabase.from('user').update({ is_voted: true }).eq('id', authStore.user?.id)
+    await fetchData()
+  } catch (e) {
+    console.error(e)
     alert('투표 중 오류가 발생했습니다.')
-    return
+  } finally {
+    submitting.value = false
   }
-
-  await supabase.from('user').update({ is_voted: true }).eq('id', authStore.user?.id)
-  hasVoted.value = true
-  
-  // Check if everyone voted
-  checkAllVoted()
 }
 
-const checkAllVoted = async () => {
-  const { data } = await supabase.from('user').select('is_voted').eq('room_id', roomId)
-  if (data?.every(u => u.is_voted)) {
-    // Transition to RESULT status
-    await supabase.from('room').update({ status: ROOM_STATUS.RESULT }).eq('id', roomId)
+// 전원 투표 완료 시, 단 한 클라이언트만 결과 상태로 전환하며 검거 점수를 부여한다.
+const resolveIfAllVoted = async () => {
+  const allVoted = users.value.length > 0 && users.value.every((u) => u.is_voted)
+  if (!allVoted) return
+
+  const { data: claimed } = await supabase
+    .from('room')
+    .update({ status: ROOM_STATUS.RESULT })
+    .eq('id', roomId)
+    .eq('status', ROOM_STATUS.PLAYING)
+    .select()
+
+  if (claimed && claimed.length > 0) {
+    const deltas = computeScoreDeltas(results.value)
+    await Promise.all(
+      teams.value.map((t) => {
+        const d = deltas[t.id] || 0
+        return d ? supabase.from('team').update({ score: t.score + d }).eq('id', t.id) : null
+      })
+    )
+  }
+}
+
+// 라이어 제시어 정답 (+30)
+const submitGuess = async () => {
+  if (guessSubmitted.value) return
+  const correct = normalizeWord(guessInput.value) === normalizeWord(room.value.secret_word)
+  guessSubmitted.value = true
+  guessResult.value = correct ? 'correct' : 'wrong'
+  if (correct && myTeam.value) {
+    await supabase
+      .from('team')
+      .update({ score: myTeam.value.score + 30 })
+      .eq('id', myTeam.value.id)
+  }
+}
+
+// 다음 라운드: 단 한 클라이언트만 전환. 역할 재배정 + 투표 초기화.
+const nextRound = async () => {
+  if (advancing.value) return
+  advancing.value = true
+  try {
+    const { data: claimed } = await supabase
+      .from('room')
+      .update({ status: ROOM_STATUS.PLAYING })
+      .eq('id', roomId)
+      .eq('status', ROOM_STATUS.RESULT)
+      .select()
+
+    if (claimed && claimed.length > 0) {
+      const { category, secret_word } = pickCategoryAndWord()
+      const roleUpdates = assignRoles(teams.value, users.value)
+      await Promise.all(
+        roleUpdates.map((u) =>
+          supabase.from('user').update({ role: u.role, is_voted: false }).eq('id', u.id)
+        )
+      )
+      await supabase.from('votes').delete().eq('room_id', roomId)
+      await supabase
+        .from('room')
+        .update({ category, secret_word, current_round: room.value.current_round + 1 })
+        .eq('id', roomId)
+    }
+    // 로컬 입력 상태 초기화
+    selection.value = { own: '', opp: '' }
+    guessInput.value = ''
+    guessSubmitted.value = false
+    guessResult.value = ''
+    await fetchData()
+  } finally {
+    advancing.value = false
   }
 }
 
 const resetRoom = async () => {
-  if (!confirm('정말 방을 초기화하시겠습니까? 모든 플레이어가 로비로 이동됩니다.')) return
-  
-  await supabase.from('user').update({ room_id: null, team_id: null, role: null, is_voted: false }).eq('room_id', roomId)
+  if (!confirm(MESSAGES.RESET_CONFIRM)) return
+  await supabase
+    .from('user')
+    .update({ room_id: null, team_id: null, role: null, is_voted: false })
+    .eq('room_id', roomId)
   await supabase.from('room').delete().eq('id', roomId)
-  router.push({ name: 'lobby' })
+  router.replace({ name: 'lobby' })
 }
 
-const submitLiarGuess = async () => {
-  const normalizedGuess = liarGuess.value.trim().replace(/\s+/g, '')
-  const normalizedSecret = room.value.secret_word.trim().replace(/\s+/g, '')
-  
-  if (normalizedGuess === normalizedSecret) {
-    alert('정답입니다! 라이어가 승리하여 점수를 획득합니다.')
-    // Update score logic here (+30)
-  } else {
-    alert('오답입니다! 시민팀이 승리합니다.')
-  }
-  
-  // Finish game or go to next round
-  await supabase.from('room').update({ status: ROOM_STATUS.WAITING, current_round: room.value.current_round + 1 }).eq('id', roomId)
-  await supabase.from('user').update({ is_voted: false, role: null }).eq('room_id', roomId)
-}
+const goLobby = () => router.replace({ name: 'lobby' })
 
-let subscription: any = null
-
+let unsubscribe: (() => void) | null = null
+let poll: ReturnType<typeof setInterval> | null = null
 onMounted(() => {
-  fetchGameData()
-  
-  subscription = supabase
-    .channel(`game:${roomId}`)
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'user', filter: `room_id=eq.${roomId}` }, () => {
-      fetchGameData()
-    })
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'room', filter: `id=eq.${roomId}` }, (payload) => {
-      if (payload.eventType === 'DELETE') {
-        alert('방이 초기화되었습니다. 로비로 이동합니다.')
-        router.push({ name: 'lobby' })
-        return
-      }
-      room.value = payload.new
-      if (payload.new.status === ROOM_STATUS.WAITING) {
-        router.push({ name: 'room', params: { id: roomId } })
-      }
-    })
-    .subscribe()
+  fetchData()
+  unsubscribe = subscribeRoom(roomId, () => fetchData())
+  poll = setInterval(fetchData, 3000)
 })
-
 onUnmounted(() => {
-  if (subscription) supabase.removeChannel(subscription)
+  if (unsubscribe) unsubscribe()
+  if (poll) clearInterval(poll)
 })
 </script>
 
 <template>
   <div class="flex-1 flex flex-col p-6 max-w-2xl mx-auto w-full">
-    <div v-if="loading" class="flex-1 flex items-center justify-center">
-      <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
+    <div v-if="loading" class="flex-1 flex items-center justify-center py-20">
+      <div class="animate-spin rounded-full h-10 w-10 border-b-2 border-indigo-600"></div>
     </div>
 
     <template v-else>
-      <!-- Header -->
-      <div class="bg-white rounded-xl shadow-sm border p-6 mb-6 flex justify-between items-center">
+      <!-- 헤더 -->
+      <div class="bg-white rounded-2xl shadow-sm border p-5 mb-6 flex justify-between items-center">
         <div>
-          <span class="text-xs font-bold text-indigo-600 bg-indigo-50 px-2 py-1 rounded uppercase mb-1 block w-fit">ROUND {{ room.current_round }}</span>
-          <h1 class="text-2xl font-bold text-gray-800">카테고리: {{ room.category }}</h1>
+          <span
+            class="text-xs font-black text-indigo-600 bg-indigo-50 px-2 py-1 rounded uppercase block w-fit mb-1"
+            >ROUND {{ room.current_round }}</span
+          >
+          <h1 class="text-xl font-black text-gray-800">카테고리 · {{ room.category }}</h1>
         </div>
-        <button @click="resetRoom" class="text-xs text-red-400 hover:text-red-600 font-bold border border-red-100 hover:border-red-200 px-2 py-1 rounded transition-all">방 초기화</button>
+        <button
+          @click="resetRoom"
+          class="text-xs font-bold text-red-400 hover:text-red-600 border border-red-100 hover:border-red-200 px-2 py-1.5 rounded-lg transition-all"
+        >
+          리셋
+        </button>
       </div>
 
-      <!-- Role Card -->
-      <div class="bg-indigo-600 rounded-2xl shadow-xl p-8 mb-8 text-white text-center transform transition-all hover:scale-[1.02]">
-        <h2 class="text-lg opacity-80 mb-2">당신의 역할은?</h2>
-        <div v-if="authStore.user?.role === 'LIAR'">
-          <h3 class="text-4xl font-black mb-4 tracking-tighter">라이어 입니다!</h3>
-          <p class="text-indigo-100 leading-relaxed">제시어를 들키지 않게 연기하세요.<br>들키더라도 제시어를 맞추면 역전의 기회가 있습니다!</p>
-        </div>
-        <div v-else>
-          <h3 class="text-4xl font-black mb-2 tracking-tighter">{{ authStore.user?.role }} 입니다!</h3>
-          <p class="text-indigo-100 mb-4">제시어는 <span class="bg-white text-indigo-600 px-2 py-0.5 rounded font-bold">{{ room.secret_word }}</span> 입니다.</p>
-          <p class="text-indigo-100 text-sm opacity-80">라이어에게 제시어를 들키지 않도록 주의하며 대화하세요.</p>
-        </div>
+      <!-- 역할 카드 -->
+      <div
+        :class="[
+          'rounded-3xl shadow-xl p-8 mb-8 text-center text-white',
+          myRole === ROLES.LIAR ? 'bg-rose-600' : 'bg-indigo-600'
+        ]"
+      >
+        <h2 class="text-sm opacity-80 mb-2">당신의 역할</h2>
+        <template v-if="myRole === ROLES.LIAR">
+          <h3 class="text-4xl font-black mb-4 tracking-tighter">라이어 🤫</h3>
+          <p class="text-rose-100 leading-relaxed text-sm">
+            제시어를 모르는 척 연기하세요.<br />들켜도 제시어를 맞히면 역전할 수 있습니다!
+          </p>
+        </template>
+        <template v-else>
+          <h3 class="text-4xl font-black mb-3 tracking-tighter">시민 🙂</h3>
+          <p class="text-indigo-100 text-sm">
+            제시어는
+            <span class="bg-white text-indigo-600 px-2 py-0.5 rounded font-black mx-1">{{
+              room.secret_word
+            }}</span>
+            입니다.
+          </p>
+          <p class="text-indigo-200 text-xs mt-2 opacity-80">라이어에게 들키지 않게 대화하세요.</p>
+        </template>
       </div>
 
-      <!-- Voting Phase -->
-      <div v-if="room.status === ROOM_STATUS.PLAYING" class="space-y-6">
-        <div v-if="!hasVoted">
-          <h2 class="text-xl font-bold mb-4 flex items-center gap-2">
+      <!-- 진행: 라이어 지목 투표 -->
+      <div v-if="room.status === ROOM_STATUS.PLAYING">
+        <div v-if="!hasVoted" class="space-y-6">
+          <h2 class="text-lg font-black flex items-center gap-2">
             <span class="w-2 h-6 bg-indigo-600 rounded-full"></span>
-            라이어 지목 (다수결 채택)
+            라이어 지목 <span class="text-sm font-medium text-gray-400">(다수결로 채택)</span>
           </h2>
-          
-          <div class="space-y-6">
-            <!-- Own Team -->
-            <div class="bg-white rounded-xl border p-5">
-              <label class="block text-sm font-bold text-gray-500 mb-3 uppercase tracking-wider">우리팀 라이어</label>
-              <div class="grid grid-cols-2 gap-2">
-                <button 
-                  v-for="member in myTeamMembers" 
-                  :key="member.id"
-                  @click="myVotes.ownTeamLiar = member.id"
-                  :class="['py-3 px-4 rounded-lg font-medium transition-all text-sm', myVotes.ownTeamLiar === member.id ? 'bg-indigo-600 text-white shadow-md' : 'bg-gray-50 text-gray-700 hover:bg-gray-100']"
-                >
-                  {{ member.name }}
-                </button>
-              </div>
-            </div>
 
-            <!-- Opponent Team -->
-            <div class="bg-white rounded-xl border p-5">
-              <label class="block text-sm font-bold text-gray-500 mb-3 uppercase tracking-wider">상대팀 라이어</label>
-              <div class="grid grid-cols-2 gap-2">
-                <button 
-                  v-for="member in opponentTeamMembers" 
-                  :key="member.id"
-                  @click="myVotes.opponentTeamLiar = member.id"
-                  :class="['py-3 px-4 rounded-lg font-medium transition-all text-sm', myVotes.opponentTeamLiar === member.id ? 'bg-indigo-600 text-white shadow-md' : 'bg-gray-50 text-gray-700 hover:bg-gray-100']"
-                >
-                  {{ member.name }}
-                </button>
-              </div>
+          <div class="bg-white rounded-2xl border p-5">
+            <label class="block text-xs font-black text-gray-400 mb-3 uppercase tracking-wider"
+              >우리팀 라이어</label
+            >
+            <div class="grid grid-cols-2 gap-2">
+              <button
+                v-for="m in myTeamMembers"
+                :key="m.id"
+                @click="selection.own = m.id"
+                :class="[
+                  'py-3 px-4 rounded-xl font-bold text-sm transition-all',
+                  selection.own === m.id
+                    ? 'bg-indigo-600 text-white shadow-md'
+                    : 'bg-gray-50 text-gray-700 hover:bg-gray-100'
+                ]"
+              >
+                {{ m.name }}
+              </button>
             </div>
           </div>
 
-          <button 
+          <div class="bg-white rounded-2xl border p-5">
+            <label class="block text-xs font-black text-gray-400 mb-3 uppercase tracking-wider"
+              >상대팀 라이어</label
+            >
+            <div class="grid grid-cols-2 gap-2">
+              <button
+                v-for="m in opponentTeamMembers"
+                :key="m.id"
+                @click="selection.opp = m.id"
+                :class="[
+                  'py-3 px-4 rounded-xl font-bold text-sm transition-all',
+                  selection.opp === m.id
+                    ? 'bg-indigo-600 text-white shadow-md'
+                    : 'bg-gray-50 text-gray-700 hover:bg-gray-100'
+                ]"
+              >
+                {{ m.name }}
+              </button>
+            </div>
+          </div>
+
+          <button
             @click="submitVotes"
-            class="w-full mt-8 py-4 bg-indigo-600 hover:bg-indigo-700 text-white text-xl font-bold rounded-xl transition-colors shadow-lg shadow-indigo-200"
+            :disabled="submitting"
+            class="w-full py-4 bg-indigo-600 hover:bg-indigo-700 text-white text-lg font-black rounded-2xl transition-colors shadow-lg shadow-indigo-200 active:scale-95 disabled:opacity-50"
           >
             제출하기
           </button>
         </div>
 
-        <div v-else class="bg-white rounded-xl border p-12 text-center">
-          <div class="w-16 h-16 bg-green-100 text-green-600 rounded-full flex items-center justify-center mx-auto mb-4">
-            <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <div v-else class="bg-white rounded-2xl border p-12 text-center">
+          <div
+            class="w-16 h-16 bg-green-100 text-green-600 rounded-full flex items-center justify-center mx-auto mb-4"
+          >
+            <svg class="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7" />
             </svg>
           </div>
-          <h2 class="text-2xl font-bold mb-2">투표 완료!</h2>
-          <p class="text-gray-500">다른 플레이어들이 투표를 마칠 때까지 기다려주세요.</p>
+          <h2 class="text-2xl font-black mb-2">투표 완료!</h2>
+          <p class="text-gray-500">
+            {{ users.filter((u) => u.is_voted).length }} / {{ users.length }}명 투표 ·
+            나머지 인원을 기다리는 중...
+          </p>
         </div>
       </div>
 
-      <!-- Result Phase -->
-      <div v-if="room.status === ROOM_STATUS.RESULT" class="space-y-6">
-        <h2 class="text-2xl font-bold text-center mb-8">투표 결과</h2>
-        <!-- This part needs more logic to show who was picked and if they were correct -->
-        <div class="bg-white rounded-xl border p-8 text-center">
-          <p class="text-lg mb-4">결과를 집계 중입니다...</p>
-          
-          <div v-if="authStore.user?.role === 'LIAR'" class="mt-8 border-t pt-8">
-            <h3 class="text-xl font-bold mb-4 text-red-500">당신은 정체를 들켰습니다!</h3>
-            <p class="mb-4">제시어를 맞추면 역전할 수 있습니다.</p>
-            <input 
-              v-model="liarGuess"
-              type="text"
-              placeholder="제시어 입력"
-              class="w-full px-4 py-3 rounded-lg border mb-4 text-center text-xl font-bold"
-              @keyup.enter="submitLiarGuess"
-            />
-            <button @click="submitLiarGuess" class="w-full py-3 bg-red-500 text-white font-bold rounded-lg">정답 제출</button>
+      <!-- 결과 -->
+      <div v-else-if="room.status === ROOM_STATUS.RESULT" class="space-y-5">
+        <h2 class="text-2xl font-black text-center">투표 결과</h2>
+
+        <!-- 우리팀 관점 결과 -->
+        <div v-if="myResult" class="space-y-3">
+          <div class="bg-white rounded-2xl border p-5">
+            <p class="text-gray-500 text-sm mb-1">
+              우리팀 라이어는
+              <b class="text-gray-800">{{ userName(myResult.ownDesignatedId) }}</b
+              >(으)로 지목했습니다
+            </p>
+            <p :class="myResult.ownCaught ? 'text-green-600 font-black' : 'text-rose-500 font-bold'">
+              {{ myResult.ownCaught ? '✓ 라이어가 맞습니다 (+10)' : '✗ 라이어가 아닙니다' }}
+            </p>
           </div>
+          <div class="bg-white rounded-2xl border p-5">
+            <p class="text-gray-500 text-sm mb-1">
+              상대팀 라이어는
+              <b class="text-gray-800">{{ userName(myResult.oppDesignatedId) }}</b
+              >(으)로 지목했습니다
+            </p>
+            <p :class="myResult.oppCaught ? 'text-green-600 font-black' : 'text-rose-500 font-bold'">
+              {{ myResult.oppCaught ? '✓ 라이어가 맞습니다!' : '✗ 라이어가 아닙니다' }}
+            </p>
+          </div>
+        </div>
+
+        <!-- 아무도 못 맞춤 -->
+        <div
+          v-if="nobodyCaught"
+          class="bg-amber-50 border border-amber-200 text-amber-700 rounded-2xl p-5 text-center font-bold"
+        >
+          두 팀 다 상대팀 라이어를 맞추지 못했습니다!<br />
+          <span class="text-sm font-medium">다음 라운드로 넘어갑니다.</span>
+        </div>
+
+        <!-- 라이어가 검거된 경우: 제시어 맞히기 -->
+        <template v-else>
+          <!-- 내가 검거당한 라이어 -->
+          <div
+            v-if="iAmCaughtLiar"
+            class="bg-rose-50 border-2 border-rose-200 rounded-2xl p-6 text-center"
+          >
+            <h3 class="text-lg font-black text-rose-600 mb-2">정체가 들켰습니다!</h3>
+            <p class="text-rose-500 text-sm mb-4">제시어를 맞히면 +30점으로 역전할 수 있어요.</p>
+            <template v-if="!guessSubmitted">
+              <input
+                v-model="guessInput"
+                type="text"
+                placeholder="제시어 입력"
+                class="w-full px-4 py-3 rounded-xl border-2 border-rose-200 focus:border-rose-400 outline-none mb-3 text-center text-xl font-black"
+                @keyup.enter="submitGuess"
+              />
+              <button
+                @click="submitGuess"
+                class="w-full py-3 bg-rose-600 hover:bg-rose-700 text-white font-black rounded-xl transition-colors"
+              >
+                정답 제출
+              </button>
+            </template>
+            <div v-else>
+              <p
+                :class="[
+                  'text-2xl font-black',
+                  guessResult === 'correct' ? 'text-green-600' : 'text-gray-500'
+                ]"
+              >
+                {{ guessResult === 'correct' ? '정답! +30점 🎉' : '오답입니다 😢' }}
+              </p>
+            </div>
+          </div>
+
+          <!-- 일반 유저: 라이어 입력 대기 안내 -->
+          <div v-else class="bg-white border rounded-2xl p-6 text-center">
+            <p class="text-gray-700 font-bold mb-1">검거된 라이어가 제시어를 맞히는 중입니다…</p>
+            <p class="text-gray-400 text-sm">라이어가 맞히면 해당 팀이 +30점을 얻습니다.</p>
+          </div>
+        </template>
+
+        <button
+          @click="nextRound"
+          :disabled="advancing"
+          class="w-full py-4 bg-indigo-600 hover:bg-indigo-700 text-white text-lg font-black rounded-2xl transition-colors shadow-lg shadow-indigo-200 active:scale-95 disabled:opacity-50"
+        >
+          다음 라운드
+        </button>
+      </div>
+
+      <!-- 종료 -->
+      <div v-else-if="room.status === ROOM_STATUS.FINISHED" class="space-y-5">
+        <h2 class="text-2xl font-black text-center mb-2">게임 종료 🏁</h2>
+        <div
+          v-for="team in [...teams].sort((a, b) => b.score - a.score)"
+          :key="team.id"
+          class="bg-white rounded-2xl border p-5 flex justify-between items-center"
+        >
+          <span class="font-black text-gray-800">{{ team.team_name }}</span>
+          <span class="text-2xl font-black text-indigo-600">{{ team.score }}점</span>
+        </div>
+        <button
+          @click="goLobby"
+          class="w-full py-4 bg-indigo-600 hover:bg-indigo-700 text-white text-lg font-black rounded-2xl transition-colors shadow-lg"
+        >
+          로비로 돌아가기
+        </button>
+      </div>
+
+      <!-- 현재 점수 (진행/결과 공통) -->
+      <div
+        v-if="room.status !== ROOM_STATUS.FINISHED"
+        class="mt-8 grid grid-cols-2 gap-3"
+      >
+        <div
+          v-for="team in teams"
+          :key="team.id"
+          :class="[
+            'rounded-2xl border p-4 text-center',
+            team.id === myTeam?.id ? 'bg-indigo-50 border-indigo-200' : 'bg-white'
+          ]"
+        >
+          <p class="text-xs font-bold text-gray-400 mb-1">{{ team.team_name }}</p>
+          <p class="text-2xl font-black text-gray-800">{{ team.score }}</p>
         </div>
       </div>
     </template>

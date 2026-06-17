@@ -33,6 +33,12 @@ create table public.team (
   constraint team_room_id_fkey foreign KEY (room_id) references room (id) on delete CASCADE
 ) TABLESPACE pg_default;
 
+insert into public.team (id, team_name, score, room_id) values
+('team_cpu', 'cpu', 0, null),
+('team_gpu', 'gpu', 0, null),
+('team_ram', 'ram', 0, null),
+('team_cache', 'cache', 0, null);
+
 
 ### 3. user
 create table public.user (

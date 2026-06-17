@@ -31,24 +31,26 @@ const router = createRouter({
       path: '/admin',
       name: 'admin',
       component: () => import('../views/AdminView.vue'),
-      meta: { requiresAuth: true }
-    }
+      meta: { requiresAuth: true, requiresAdmin: true }
+    },
+    { path: '/:pathMatch(.*)*', redirect: { name: 'lobby' } }
   ]
 })
 
-router.beforeEach(async (to, from, next) => {
+router.beforeEach(async (to) => {
   const authStore = useAuthStore()
-  if (!authStore.user) {
-    await authStore.initialize()
-  }
+  await authStore.initialize()
 
   if (to.meta.requiresAuth && !authStore.isAuthenticated) {
-    next({ name: 'login' })
-  } else if (to.name === 'login' && authStore.isAuthenticated) {
-    next({ name: 'lobby' })
-  } else {
-    next()
+    return { name: 'login' }
   }
+  if (to.meta.requiresAdmin && !authStore.isAdmin) {
+    return { name: 'lobby' }
+  }
+  if (to.name === 'login' && authStore.isAuthenticated) {
+    return { name: 'lobby' }
+  }
+  return true
 })
 
 export default router

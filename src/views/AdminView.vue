@@ -1,150 +1,276 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { supabase } from '../supabase'
-import { ROOM_STATUS } from '../constants'
+import {
+  ROOM_STATUS,
+  ROOM_STATUS_LABELS,
+  GAME_TYPES,
+  GAME_TYPE_LABELS,
+  ROLES,
+  MESSAGES
+} from '../constants'
+import { assignRoles, pickCategoryAndWord } from '../game/liar'
+
+const router = useRouter()
 
 const rooms = ref<any[]>([])
-const selectedRoom = ref<any>(null)
-const roomUsers = ref<any[]>([])
-const roomTeams = ref<any[]>([])
 const loading = ref(true)
+const selectedRoomId = ref<string | null>(null)
+const busy = ref(false)
 
 const fetchRooms = async () => {
-  const { data } = await supabase.from('room').select('*')
+  const { data } = await supabase
+    .from('room')
+    .select('*, team(*), user(*)')
+    .order('id')
   rooms.value = data || []
   loading.value = false
 }
 
-const selectRoom = async (room: any) => {
-  selectedRoom.value = room
-  const { data: users } = await supabase.from('user').select('*').eq('room_id', room.id)
-  roomUsers.value = users || []
-  const { data: teams } = await supabase.from('team').select('*').eq('room_id', room.id)
-  roomTeams.value = teams || []
-}
+const teamsOf = (room: any) =>
+  (room.team || []).slice().sort((a: any, b: any) => a.team_name.localeCompare(b.team_name))
+const membersOf = (room: any, teamId: string) =>
+  (room.user || []).filter((u: any) => u.team_id === teamId)
+const memberCount = (room: any) => (room.user ? room.user.length : 0)
 
-const updateScore = async (teamId: string, amount: number) => {
-  const team = roomTeams.value.find(t => t.id === teamId)
-  if (!team) return
-  
-  const { error } = await supabase
-    .from('team')
-    .update({ score: team.score + amount })
-    .eq('id', teamId)
-  
-  if (!error) {
-    team.score += amount
+const startGame = async (room: any) => {
+  if (busy.value) return
+  if (room.game_type !== GAME_TYPES.LIAR) {
+    alert('마피아 게임은 준비 중입니다.')
+    return
+  }
+  const teams = teamsOf(room)
+  if (!teams.every((t: any) => membersOf(room, t.id).length >= 1)) {
+    alert(MESSAGES.START_NEED_MEMBERS)
+    return
+  }
+  busy.value = true
+  try {
+    const { category, secret_word } = pickCategoryAndWord()
+    const roleUpdates = assignRoles(teams, room.user || [])
+    await Promise.all(
+      roleUpdates.map((u) =>
+        supabase.from('user').update({ role: u.role, is_voted: false }).eq('id', u.id)
+      )
+    )
+    await supabase.from('votes').delete().eq('room_id', room.id)
+    await supabase
+      .from('room')
+      .update({ status: ROOM_STATUS.PLAYING, category, secret_word, current_round: 1 })
+      .eq('id', room.id)
+    await fetchRooms()
+  } finally {
+    busy.value = false
   }
 }
 
-const changeUserTeam = async (userId: string, teamId: string) => {
-  const { error } = await supabase
+const endGame = async (room: any) => {
+  if (!confirm(MESSAGES.END_CONFIRM)) return
+  await supabase.from('room').update({ status: ROOM_STATUS.FINISHED }).eq('id', room.id)
+  await fetchRooms()
+}
+
+const deleteRoom = async (room: any) => {
+  if (!confirm('방을 삭제하고 모든 인원을 내보냅니다. 진행할까요?')) return
+  await supabase
     .from('user')
-    .update({ team_id: teamId })
-    .eq('id', userId)
-  
-  if (!error) {
-    const user = roomUsers.value.find(u => u.id === userId)
-    if (user) user.team_id = teamId
-  }
+    .update({ room_id: null, team_id: null, role: null, is_voted: false })
+    .eq('room_id', room.id)
+  await supabase.from('room').delete().eq('id', room.id)
+  if (selectedRoomId.value === room.id) selectedRoomId.value = null
+  await fetchRooms()
 }
 
-const stopGame = async (roomId: string) => {
-  await supabase.from('room').update({ status: ROOM_STATUS.WAITING }).eq('id', roomId)
-  fetchRooms()
-  if (selectedRoom.value?.id === roomId) selectedRoom.value.status = ROOM_STATUS.WAITING
+const adjustScore = async (team: any, delta: number) => {
+  const next = Math.max(0, team.score + delta)
+  await supabase.from('team').update({ score: next }).eq('id', team.id)
+  await fetchRooms()
 }
 
+const changeTeam = async (user: any, teamId: string) => {
+  await supabase.from('user').update({ team_id: teamId }).eq('id', user.id)
+  await fetchRooms()
+}
+
+const roleLabel = (role: string | null) =>
+  role === ROLES.LIAR ? '라이어' : role === ROLES.CITIZEN ? '시민' : '-'
+
+let channel: any = null
 onMounted(() => {
   fetchRooms()
+  channel = supabase
+    .channel('admin-sync')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'room' }, fetchRooms)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'team' }, fetchRooms)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'user' }, fetchRooms)
+    .subscribe()
+})
+onUnmounted(() => {
+  if (channel) supabase.removeChannel(channel)
 })
 </script>
 
 <template>
-  <div class="flex-1 flex flex-col p-6 max-w-6xl mx-auto w-full">
-    <h1 class="text-3xl font-bold mb-8">어드민 패널</h1>
+  <div class="flex-1 flex flex-col p-6 max-w-5xl mx-auto w-full">
+    <div class="flex justify-between items-center mb-8">
+      <h1 class="text-2xl font-black text-gray-800">관리자 · 방 통제</h1>
+      <button @click="router.push({ name: 'lobby' })" class="text-sm text-indigo-600 hover:underline">
+        유저 화면으로
+      </button>
+    </div>
 
-    <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
-      <!-- Room List -->
-      <div class="lg:col-span-1 space-y-4">
-        <h2 class="text-xl font-bold mb-4">방 목록</h2>
-        <div 
-          v-for="room in rooms" 
-          :key="room.id"
-          @click="selectRoom(room)"
-          :class="['p-4 rounded-xl border cursor-pointer transition-all', selectedRoom?.id === room.id ? 'border-indigo-600 bg-indigo-50' : 'bg-white hover:border-gray-400']"
-        >
-          <div class="flex justify-between items-start mb-2">
-            <span class="font-bold text-lg">{{ room.id }}</span>
-            <span :class="['text-xs px-2 py-1 rounded font-bold', room.status === ROOM_STATUS.WAITING ? 'bg-green-100 text-green-600' : 'bg-blue-100 text-blue-600']">
-              {{ room.status }}
-            </span>
+    <div v-if="loading" class="flex-1 flex items-center justify-center py-20">
+      <div class="animate-spin rounded-full h-10 w-10 border-b-2 border-indigo-600"></div>
+    </div>
+
+    <div v-else-if="rooms.length === 0" class="text-center text-gray-400 py-20">
+      생성된 방이 없습니다.
+    </div>
+
+    <div v-else class="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div v-for="room in rooms" :key="room.id" class="bg-white rounded-2xl border p-5 shadow-sm">
+        <!-- 카드 헤더 -->
+        <div class="flex justify-between items-start mb-3">
+          <div>
+            <div class="flex items-center gap-2 mb-1">
+              <span
+                :class="[
+                  'text-xs font-black px-2 py-0.5 rounded uppercase',
+                  room.game_type === GAME_TYPES.LIAR
+                    ? 'bg-orange-100 text-orange-600'
+                    : 'bg-blue-100 text-blue-600'
+                ]"
+                >{{ GAME_TYPE_LABELS[room.game_type] || room.game_type }}</span
+              >
+              <span
+                :class="[
+                  'text-xs font-bold px-2 py-0.5 rounded',
+                  room.status === ROOM_STATUS.WAITING
+                    ? 'bg-green-100 text-green-600'
+                    : room.status === ROOM_STATUS.FINISHED
+                      ? 'bg-gray-200 text-gray-500'
+                      : 'bg-indigo-100 text-indigo-600'
+                ]"
+                >{{ ROOM_STATUS_LABELS[room.status] || room.status }}</span
+              >
+            </div>
+            <h3 class="text-xl font-black text-gray-800">{{ room.id }}</h3>
           </div>
-          <p class="text-sm text-gray-500">{{ room.game_type }} / 라운드: {{ room.current_round }}</p>
+          <span class="text-sm text-gray-400 font-bold">라운드 {{ room.current_round }}</span>
         </div>
-      </div>
 
-      <!-- Room Details -->
-      <div class="lg:col-span-2">
-        <div v-if="selectedRoom" class="bg-white rounded-2xl shadow-sm border p-8">
-          <div class="flex justify-between items-center mb-8">
-            <h2 class="text-2xl font-bold">{{ selectedRoom.id }} 번 방 상세</h2>
-            <button @click="stopGame(selectedRoom.id)" class="px-4 py-2 bg-red-100 text-red-600 rounded-lg font-bold hover:bg-red-200">게임 중단</button>
+        <!-- 팀 인원/점수 -->
+        <div class="flex flex-wrap gap-2 text-sm text-gray-500 mb-4">
+          <span v-for="t in teamsOf(room)" :key="t.id" class="bg-gray-50 px-2 py-1 rounded">
+            {{ t.team_name }} {{ membersOf(room, t.id).length }}명 · {{ t.score }}점
+          </span>
+          <span class="ml-auto">총 {{ memberCount(room) }}명</span>
+        </div>
+
+        <!-- 컨트롤 -->
+        <div class="flex flex-wrap gap-2">
+          <button
+            v-if="room.status === ROOM_STATUS.WAITING"
+            @click="startGame(room)"
+            :disabled="busy"
+            class="px-3 py-1.5 text-sm font-bold bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50"
+          >
+            게임 시작
+          </button>
+          <button
+            v-if="room.status === ROOM_STATUS.PLAYING || room.status === ROOM_STATUS.RESULT"
+            @click="endGame(room)"
+            class="px-3 py-1.5 text-sm font-bold bg-rose-600 text-white rounded-lg hover:bg-rose-700"
+          >
+            게임 종료
+          </button>
+          <button
+            @click="selectedRoomId = selectedRoomId === room.id ? null : room.id"
+            class="px-3 py-1.5 text-sm font-bold bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200"
+          >
+            {{ selectedRoomId === room.id ? '닫기' : '상세' }}
+          </button>
+          <button
+            @click="deleteRoom(room)"
+            class="px-3 py-1.5 text-sm font-bold text-red-500 border border-red-100 rounded-lg hover:bg-red-50 ml-auto"
+          >
+            삭제
+          </button>
+        </div>
+
+        <!-- 상세 -->
+        <div v-if="selectedRoomId === room.id" class="mt-5 pt-5 border-t space-y-4">
+          <div class="text-sm">
+            <span class="text-gray-400 font-bold">제시어: </span>
+            <span class="font-black text-gray-800">{{ room.secret_word || '미정' }}</span>
+            <span class="text-gray-400 font-bold ml-3">카테고리: </span>
+            <span class="font-bold text-gray-700">{{ room.category || '미정' }}</span>
           </div>
 
-          <div class="grid grid-cols-2 gap-4 mb-8">
-            <div class="p-4 bg-gray-50 rounded-xl">
-              <span class="text-sm text-gray-500 block mb-1">제시어</span>
-              <span class="text-xl font-bold">{{ selectedRoom.secret_word || '-' }}</span>
-            </div>
-            <div class="p-4 bg-gray-50 rounded-xl">
-              <span class="text-sm text-gray-500 block mb-1">카테고리</span>
-              <span class="text-xl font-bold">{{ selectedRoom.category || '-' }}</span>
-            </div>
-          </div>
-
-          <!-- Team Scores -->
-          <div class="mb-8">
-            <h3 class="text-lg font-bold mb-4">팀 점수 관리</h3>
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div v-for="team in roomTeams" :key="team.id" class="p-4 border rounded-xl flex justify-between items-center">
-                <div>
-                  <span class="font-bold">{{ team.team_name }}</span>
-                  <span class="ml-2 text-indigo-600 font-bold">{{ team.score }}점</span>
-                </div>
-                <div class="flex gap-2">
-                  <button @click="updateScore(team.id, -10)" class="w-8 h-8 flex items-center justify-center bg-gray-100 rounded-lg hover:bg-gray-200">-</button>
-                  <button @click="updateScore(team.id, 10)" class="w-8 h-8 flex items-center justify-center bg-gray-100 rounded-lg hover:bg-gray-200">+</button>
-                </div>
+          <!-- 팀별 점수 조정 -->
+          <div class="space-y-2">
+            <div
+              v-for="t in teamsOf(room)"
+              :key="t.id"
+              class="flex items-center justify-between bg-gray-50 rounded-xl px-3 py-2"
+            >
+              <span class="font-bold text-gray-700">{{ t.team_name }}</span>
+              <div class="flex items-center gap-2">
+                <button
+                  @click="adjustScore(t, -10)"
+                  class="w-7 h-7 rounded-lg bg-white border text-gray-600 font-black hover:bg-gray-100"
+                >
+                  −
+                </button>
+                <span class="w-12 text-center font-black text-indigo-600">{{ t.score }}</span>
+                <button
+                  @click="adjustScore(t, 10)"
+                  class="w-7 h-7 rounded-lg bg-white border text-gray-600 font-black hover:bg-gray-100"
+                >
+                  +
+                </button>
               </div>
             </div>
           </div>
 
-          <!-- Players -->
+          <!-- 플레이어 리스트 (역할 표시 + 팀 수정) -->
           <div>
-            <h3 class="text-lg font-bold mb-4">플레이어 리스트</h3>
-            <div class="space-y-2">
-              <div v-for="user in roomUsers" :key="user.id" class="p-3 border rounded-lg flex justify-between items-center">
-                <div class="flex items-center gap-3">
-                  <span class="font-medium">{{ user.name }}</span>
-                  <span :class="['text-xs px-2 py-0.5 rounded font-bold', user.role === 'LIAR' ? 'bg-red-100 text-red-600' : 'bg-gray-100 text-gray-600']">
-                    {{ user.role }}
-                  </span>
+            <p class="text-xs font-black text-gray-400 uppercase tracking-wider mb-2">플레이어</p>
+            <ul class="space-y-2">
+              <li
+                v-for="player in room.user"
+                :key="player.id"
+                class="flex items-center justify-between bg-white border rounded-xl px-3 py-2"
+              >
+                <div class="flex items-center gap-2 min-w-0">
+                  <span class="font-bold text-gray-800 truncate">{{ player.name }}</span>
+                  <span
+                    v-if="player.role"
+                    :class="[
+                      'text-xs font-black px-1.5 py-0.5 rounded',
+                      player.role === ROLES.LIAR
+                        ? 'bg-rose-100 text-rose-600'
+                        : 'bg-gray-100 text-gray-500'
+                    ]"
+                    >{{ roleLabel(player.role) }}</span
+                  >
                 </div>
-                <select 
-                  @change="changeUserTeam(user.id, ($event.target as HTMLSelectElement).value)"
-                  class="text-sm border rounded px-2 py-1 outline-none"
+                <select
+                  :value="player.team_id || ''"
+                  @change="changeTeam(player, ($event.target as HTMLSelectElement).value)"
+                  class="text-sm border rounded-lg px-2 py-1 bg-gray-50 font-bold text-gray-700"
                 >
-                  <option v-for="team in roomTeams" :key="team.id" :value="team.id" :selected="user.team_id === team.id">
-                    {{ team.team_name }}
+                  <option v-for="t in teamsOf(room)" :key="t.id" :value="t.id">
+                    {{ t.team_name }}
                   </option>
                 </select>
-              </div>
-            </div>
+              </li>
+              <li v-if="!room.user || room.user.length === 0" class="text-sm text-gray-300">
+                참여자가 없습니다.
+              </li>
+            </ul>
           </div>
-        </div>
-        <div v-else class="h-full flex flex-col items-center justify-center bg-gray-50 rounded-2xl border-2 border-dashed border-gray-200 p-12 text-gray-400">
-          <p>관리할 방을 선택해주세요.</p>
         </div>
       </div>
     </div>

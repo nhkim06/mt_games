@@ -3,8 +3,15 @@ import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { supabase } from '../supabase'
 import { useAuthStore } from '../stores/auth'
-import { ROOM_STATUS, CATEGORIES } from '../constants'
-import { GAME_WORDS } from '../data/words'
+import {
+  ROOM_STATUS,
+  GAME_TYPES,
+  GAME_TYPE_LABELS,
+  MESSAGES,
+  READY_THRESHOLD
+} from '../constants'
+import { subscribeRoom } from '../lib/realtime'
+import { assignRoles, pickCategoryAndWord } from '../game/liar'
 
 const route = useRoute()
 const router = useRouter()
@@ -15,182 +22,299 @@ const room = ref<any>(null)
 const teams = ref<any[]>([])
 const users = ref<any[]>([])
 const loading = ref(true)
+const starting = ref(false)
+const togglingReady = ref(false)
 
-const fetchRoomData = async () => {
-  const { data: roomData } = await supabase.from('room').select('*').eq('id', roomId).single()
+const me = computed(() => users.value.find((u) => u.id === authStore.user?.id))
+// 대기룸에서는 is_voted 컬럼을 "준비 완료" 표시로 재사용한다.
+const iAmReady = computed(() => !!me.value?.is_voted)
+const readyCount = computed(() => users.value.filter((u) => u.is_voted).length)
+
+const membersOf = (teamId: string) => users.value.filter((u) => u.team_id === teamId)
+const unassigned = computed(() => users.value.filter((u) => !u.team_id))
+const teamsBalanced = computed(
+  () => teams.value.length > 0 && teams.value.every((t) => membersOf(t.id).length >= 1)
+)
+const isLiarGame = computed(() => room.value?.game_type === GAME_TYPES.LIAR)
+const canStart = computed(
+  () => isLiarGame.value && readyCount.value >= READY_THRESHOLD && teamsBalanced.value
+)
+
+const fetchData = async () => {
+  const { data: roomData } = await supabase.from('room').select('*').eq('id', roomId).maybeSingle()
   if (!roomData) {
-    alert('방을 찾을 수 없습니다.')
-    router.push({ name: 'lobby' })
+    alert('방이 존재하지 않습니다.')
+    router.replace({ name: 'lobby' })
     return
   }
   room.value = roomData
 
-  if (roomData.status !== ROOM_STATUS.WAITING) {
-    router.push({ name: 'game', params: { id: roomId } })
+  // 게임이 시작되면 게임 화면으로 이동
+  if (roomData.status === ROOM_STATUS.PLAYING || roomData.status === ROOM_STATUS.RESULT) {
+    router.replace({ name: 'game', params: { id: roomId } })
     return
   }
 
-  const { data: teamData } = await supabase.from('team').select('*').eq('room_id', roomId)
+  const [{ data: teamData }, { data: userData }] = await Promise.all([
+    supabase.from('team').select('*').eq('room_id', roomId).order('team_name'),
+    supabase.from('user').select('*').eq('room_id', roomId)
+  ])
   teams.value = teamData || []
-
-  const { data: userData } = await supabase.from('user').select('*').eq('room_id', roomId)
   users.value = userData || []
-  
   loading.value = false
+
+  // 준비 인원이 기준을 충족하면 자동으로 게임을 시작한다.
+  if (roomData.status === ROOM_STATUS.WAITING && canStart.value) {
+    await tryStartGame()
+  }
 }
 
-const joinTeam = async (teamId: string) => {
+const switchTeam = async (teamId: string) => {
   if (!authStore.user) return
-  const { error } = await supabase
-    .from('user')
-    .update({ team_id: teamId })
-    .eq('id', authStore.user.id)
-  
-  if (error) {
-    alert('팀 참가 중 오류가 발생했습니다.')
+  await supabase.from('user').update({ team_id: teamId }).eq('id', authStore.user.id)
+  authStore.user.team_id = teamId
+  fetchData()
+}
+
+const toggleReady = async () => {
+  if (togglingReady.value || !authStore.user) return
+  if (!me.value?.team_id) {
+    alert('먼저 팀을 선택해주세요.')
+    return
+  }
+  togglingReady.value = true
+  try {
+    await supabase
+      .from('user')
+      .update({ is_voted: !iAmReady.value })
+      .eq('id', authStore.user.id)
+    await fetchData()
+  } finally {
+    togglingReady.value = false
+  }
+}
+
+// 준비 인원 충족 시, 단 한 클라이언트만 게임을 시작한다.
+const tryStartGame = async () => {
+  if (starting.value) return
+  starting.value = true
+  try {
+    // 조건부 업데이트로 WAITING -> PLAYING 전환을 한 명만 성공시킨다.
+    const { data: claimed } = await supabase
+      .from('room')
+      .update({ status: ROOM_STATUS.PLAYING })
+      .eq('id', roomId)
+      .eq('status', ROOM_STATUS.WAITING)
+      .select()
+
+    if (claimed && claimed.length > 0) {
+      const { category, secret_word } = pickCategoryAndWord()
+      const roleUpdates = assignRoles(teams.value, users.value)
+      await Promise.all(
+        roleUpdates.map((u) =>
+          supabase.from('user').update({ role: u.role, is_voted: false }).eq('id', u.id)
+        )
+      )
+      await supabase.from('votes').delete().eq('room_id', roomId)
+      await supabase
+        .from('room')
+        .update({ category, secret_word, current_round: 1 })
+        .eq('id', roomId)
+    }
+  } catch (e) {
+    console.error(e)
+  } finally {
+    starting.value = false
   }
 }
 
 const leaveRoom = async () => {
   if (!authStore.user) return
+  if (!confirm(MESSAGES.LEAVE_CONFIRM)) return
   await supabase
     .from('user')
-    .update({ room_id: null, team_id: null, role: null })
+    .update({ room_id: null, team_id: null, role: null, is_voted: false })
     .eq('id', authStore.user.id)
-  
   authStore.user.room_id = undefined
-  router.push({ name: 'lobby' })
+  authStore.user.team_id = undefined
+  router.replace({ name: 'lobby' })
 }
 
-const startGame = async () => {
-  if (users.value.length < 2) {
-    alert('최소 2명의 플레이어가 필요합니다.')
-    return
-  }
-  
-  const category = CATEGORIES[Math.floor(Math.random() * CATEGORIES.length)]
-  const words = GAME_WORDS[category]
-  const secretWord = words[Math.floor(Math.random() * words.length)]
-  
-  // Assign roles: 1 Liar per team
-  const userUpdates: any[] = []
-  for (const team of teams.value) {
-    const members = users.value.filter(u => u.team_id === team.id)
-    if (members.length === 0) continue
-    
-    const liarIndex = Math.floor(Math.random() * members.length)
-    members.forEach((member, index) => {
-      userUpdates.push({
-        id: member.id,
-        role: index === liarIndex ? 'LIAR' : 'CITIZEN',
-        is_voted: false
-      })
-    })
-  }
-
-  // Batch update users (Supabase doesn't support batch update with different values easily in one call without RPC, so we'll do it sequentially for simplicity or use a loop)
-  // Actually, we can use UPSERT if we provide all columns, but let's just do individual updates for safety in this prototype.
-  for (const update of userUpdates) {
-    await supabase.from('user').update({ role: update.role, is_voted: false }).eq('id', update.id)
-  }
-
-  const { error } = await supabase
-    .from('room')
-    .update({ 
-      status: ROOM_STATUS.PLAYING,
-      category: category,
-      secret_word: secretWord,
-      current_round: room.value.current_round || 1
-    })
-    .eq('id', roomId)
-  
-  if (error) alert('게임 시작 중 오류가 발생했습니다.')
+// 리셋: 같은 방 모든 인원을 내보내고 방 삭제 (constants의 안내 문구 사용)
+const resetRoom = async () => {
+  if (!confirm(MESSAGES.RESET_CONFIRM)) return
+  await supabase
+    .from('user')
+    .update({ room_id: null, team_id: null, role: null, is_voted: false })
+    .eq('room_id', roomId)
+  await supabase.from('room').delete().eq('id', roomId) // team/votes는 ON DELETE CASCADE
+  router.replace({ name: 'lobby' })
 }
 
-let subscription: any = null
+let unsubscribe: (() => void) | null = null
+let poll: ReturnType<typeof setInterval> | null = null
 
 onMounted(() => {
-  fetchRoomData()
-  
-  subscription = supabase
-    .channel(`room:${roomId}`)
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'user', filter: `room_id=eq.${roomId}` }, () => {
-      fetchRoomData()
-    })
-    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'room', filter: `id=eq.${roomId}` }, (payload) => {
-      if (payload.new.status === ROOM_STATUS.PLAYING) {
-        router.push({ name: 'game', params: { id: roomId } })
-      }
-    })
-    .subscribe()
+  fetchData()
+  unsubscribe = subscribeRoom(roomId, () => fetchData())
+  // 리얼타임 미설정 환경 대비 폴링
+  poll = setInterval(fetchData, 3000)
 })
-
 onUnmounted(() => {
-  if (subscription) supabase.removeChannel(subscription)
+  if (unsubscribe) unsubscribe()
+  if (poll) clearInterval(poll)
 })
-
-const teamMembers = (teamId: string) => users.value.filter(u => u.team_id === teamId)
-const unassignedUsers = computed(() => users.value.filter(u => !u.team_id))
 </script>
 
 <template>
-  <div class="flex-1 flex flex-col p-6 max-w-4xl mx-auto w-full">
-    <div v-if="loading" class="flex-1 flex items-center justify-center">
-      <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
+  <div class="flex-1 flex flex-col p-6 max-w-3xl mx-auto w-full">
+    <div v-if="loading" class="flex-1 flex items-center justify-center py-20">
+      <div class="animate-spin rounded-full h-10 w-10 border-b-2 border-indigo-600"></div>
     </div>
 
     <template v-else>
-      <div class="flex justify-between items-center mb-8">
+      <!-- 헤더 -->
+      <div class="flex justify-between items-center mb-6">
         <div>
-          <h1 class="text-3xl font-bold text-gray-800">{{ roomId }} 번 방</h1>
-          <p class="text-gray-500 font-medium">{{ room.game_type }} 대기 중</p>
+          <div class="flex items-center gap-2 mb-1">
+            <span
+              class="text-xs font-black px-2 py-0.5 rounded uppercase tracking-wider bg-orange-100 text-orange-600"
+              >{{ GAME_TYPE_LABELS[room.game_type] || room.game_type }}</span
+            >
+            <span class="text-xs font-bold px-2 py-0.5 rounded bg-green-100 text-green-600"
+              >대기중</span
+            >
+          </div>
+          <h1 class="text-2xl font-black text-gray-800">{{ room.id }} 대기룸</h1>
         </div>
-        <button @click="leaveRoom" class="bg-gray-200 hover:bg-gray-300 px-4 py-2 rounded-lg font-bold transition-colors">나가기</button>
+        <button @click="leaveRoom" class="text-sm text-gray-500 hover:text-gray-700 hover:underline">
+          나가기
+        </button>
       </div>
 
-      <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
-        <div v-for="team in teams" :key="team.id" class="bg-white rounded-xl shadow-sm border p-6">
+      <p class="text-gray-500 mb-6">
+        총 <b class="text-gray-800">{{ users.length }}</b
+        >명 입장 · 준비 완료
+        <b class="text-indigo-600">{{ readyCount }}</b> / {{ READY_THRESHOLD }}명
+      </p>
+
+      <!-- 참여자 목록 (팀별) -->
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
+        <div
+          v-for="team in teams"
+          :key="team.id"
+          :class="[
+            'bg-white rounded-2xl border-2 p-5 transition-all',
+            me?.team_id === team.id ? 'border-indigo-500 shadow-md' : 'border-gray-100'
+          ]"
+        >
           <div class="flex justify-between items-center mb-4">
-            <h2 class="text-xl font-bold">{{ team.team_name }}</h2>
-            <span class="bg-indigo-100 text-indigo-600 px-3 py-1 rounded-full text-sm font-bold">
-              {{ teamMembers(team.id).length }} 명
-            </span>
-          </div>
-          
-          <div class="space-y-2 mb-6 min-h-[100px]">
-            <div v-for="member in teamMembers(team.id)" :key="member.id" class="flex items-center gap-2 p-2 bg-gray-50 rounded-lg">
-              <div class="w-2 h-2 rounded-full bg-green-500"></div>
-              <span class="font-medium text-gray-700">{{ member.name }}</span>
-              <span v-if="member.id === authStore.user?.id" class="text-xs text-indigo-500 font-bold">(나)</span>
-            </div>
-            <p v-if="teamMembers(team.id).length === 0" class="text-gray-400 text-sm text-center py-4">팀원이 없습니다.</p>
+            <h3 class="text-lg font-black text-gray-800">{{ team.team_name }}</h3>
+            <span class="text-sm font-bold text-gray-400">{{ membersOf(team.id).length }}명</span>
           </div>
 
-          <button 
-            @click="joinTeam(team.id)"
-            :disabled="authStore.user?.team_id === team.id"
-            :class="['w-full py-3 rounded-lg font-bold transition-all', authStore.user?.team_id === team.id ? 'bg-indigo-50 text-indigo-400 cursor-default' : 'bg-indigo-600 hover:bg-indigo-700 text-white']"
+          <ul class="space-y-2 mb-4 min-h-[40px]">
+            <li
+              v-for="member in membersOf(team.id)"
+              :key="member.id"
+              class="flex items-center gap-2 text-gray-700"
+            >
+              <span
+                :class="[
+                  'w-2 h-2 rounded-full',
+                  member.is_voted ? 'bg-green-500' : 'bg-gray-300'
+                ]"
+              ></span>
+              <span class="font-medium">{{ member.name }}</span>
+              <span v-if="member.id === authStore.user?.id" class="text-xs text-indigo-500 font-bold"
+                >(나)</span
+              >
+              <span
+                v-if="member.is_voted"
+                class="ml-auto text-xs font-bold text-green-600 bg-green-50 px-1.5 py-0.5 rounded"
+                >준비완료</span
+              >
+            </li>
+            <li v-if="membersOf(team.id).length === 0" class="text-sm text-gray-300">
+              아직 팀원이 없습니다
+            </li>
+          </ul>
+
+          <button
+            v-if="me?.team_id !== team.id"
+            @click="switchTeam(team.id)"
+            class="w-full py-2 text-sm font-bold text-indigo-600 bg-indigo-50 hover:bg-indigo-100 rounded-xl transition-colors"
           >
-            {{ authStore.user?.team_id === team.id ? '소속됨' : '팀 참가' }}
+            이 팀으로 이동
           </button>
+          <div
+            v-else
+            class="w-full py-2 text-sm font-bold text-center text-indigo-400 bg-indigo-50/50 rounded-xl"
+          >
+            내 팀
+          </div>
         </div>
       </div>
 
-      <div v-if="unassignedUsers.length > 0" class="bg-white rounded-xl shadow-sm border p-6 mb-8">
-        <h2 class="text-lg font-bold mb-4">팀 미지정</h2>
-        <div class="flex flex-wrap gap-2">
-          <span v-for="user in unassignedUsers" :key="user.id" class="px-3 py-1 bg-gray-100 rounded-full text-sm font-medium text-gray-600 border">
-            {{ user.name }}
-          </span>
-        </div>
-      </div>
-
-      <button 
-        @click="startGame"
-        class="w-full py-4 bg-green-600 hover:bg-green-700 text-white text-xl font-bold rounded-xl transition-colors shadow-lg"
+      <!-- 팀 미배정 안내 -->
+      <div
+        v-if="unassigned.length > 0"
+        class="bg-amber-50 border border-amber-200 text-amber-700 text-sm rounded-xl p-3 mb-6"
       >
-        게임 시작!
-      </button>
+        팀이 없는 인원 {{ unassigned.length }}명이 있습니다. 위에서 팀을 선택해주세요.
+      </div>
+
+      <!-- 준비 완료 -->
+      <div class="mt-auto space-y-3">
+        <!-- 진행 상황 바 -->
+        <div class="bg-white rounded-2xl border p-4">
+          <div class="flex justify-between text-sm font-bold mb-2">
+            <span class="text-gray-600">게임 시작까지</span>
+            <span class="text-indigo-600">{{ readyCount }} / {{ READY_THRESHOLD }}명 준비</span>
+          </div>
+          <div class="w-full h-2.5 bg-gray-100 rounded-full overflow-hidden">
+            <div
+              class="h-full bg-indigo-600 transition-all"
+              :style="{ width: Math.min(100, (readyCount / READY_THRESHOLD) * 100) + '%' }"
+            ></div>
+          </div>
+          <p
+            v-if="readyCount >= READY_THRESHOLD && !teamsBalanced"
+            class="text-xs text-amber-600 font-bold mt-2"
+          >
+            각 팀에 최소 1명씩 있어야 시작할 수 있습니다.
+          </p>
+          <p
+            v-else-if="!isLiarGame"
+            class="text-xs text-amber-600 font-bold mt-2"
+          >
+            마피아 게임은 준비 중입니다.
+          </p>
+          <p v-else-if="canStart || starting" class="text-xs text-green-600 font-bold mt-2">
+            인원이 충족되어 곧 게임이 시작됩니다...
+          </p>
+        </div>
+
+        <button
+          @click="toggleReady"
+          :disabled="togglingReady"
+          :class="[
+            'w-full py-4 text-lg font-black rounded-2xl transition-colors shadow-lg active:scale-95 disabled:opacity-50',
+            iAmReady
+              ? 'bg-green-500 hover:bg-green-600 text-white shadow-green-200'
+              : 'bg-indigo-600 hover:bg-indigo-700 text-white shadow-indigo-200'
+          ]"
+        >
+          {{ iAmReady ? '✓ 준비 완료 (취소하려면 누르세요)' : '준비 완료' }}
+        </button>
+
+        <button
+          @click="resetRoom"
+          class="w-full py-3 text-sm font-bold text-red-500 border border-red-100 hover:bg-red-50 rounded-2xl transition-colors"
+        >
+          방 초기화 (전원 퇴장)
+        </button>
+      </div>
     </template>
   </div>
 </template>
