@@ -32,13 +32,9 @@ const readyCount = computed(() => users.value.filter((u) => u.is_voted).length)
 
 const membersOf = (teamId: string) => users.value.filter((u) => u.team_id === teamId)
 const unassigned = computed(() => users.value.filter((u) => !u.team_id))
-const teamsBalanced = computed(
-  () => teams.value.length > 0 && teams.value.every((t) => membersOf(t.id).length >= 1)
-)
 const isLiarGame = computed(() => room.value?.game_type === GAME_TYPES.LIAR)
-const canStart = computed(
-  () => isLiarGame.value && readyCount.value >= READY_THRESHOLD && teamsBalanced.value
-)
+// 준비 인원이 기준 인원 수를 충족하면 게임 시작 버튼이 활성화된다.
+const canStart = computed(() => isLiarGame.value && readyCount.value >= READY_THRESHOLD)
 
 const fetchData = async () => {
   const { data: roomData } = await supabase.from('room').select('*').eq('id', roomId).maybeSingle()
@@ -62,11 +58,6 @@ const fetchData = async () => {
   teams.value = teamData || []
   users.value = userData || []
   loading.value = false
-
-  // 준비 인원이 기준을 충족하면 자동으로 게임을 시작한다.
-  if (roomData.status === ROOM_STATUS.WAITING && canStart.value) {
-    await tryStartGame()
-  }
 }
 
 const switchTeam = async (teamId: string) => {
@@ -94,9 +85,9 @@ const toggleReady = async () => {
   }
 }
 
-// 준비 인원 충족 시, 단 한 클라이언트만 게임을 시작한다.
-const tryStartGame = async () => {
-  if (starting.value) return
+// 게임 시작: 준비 인원 충족 시에만 동작하며, 단 한 클라이언트만 시작 처리한다.
+const startGame = async () => {
+  if (starting.value || !canStart.value) return
   starting.value = true
   try {
     // 조건부 업데이트로 WAITING -> PLAYING 전환을 한 명만 성공시킨다.
@@ -278,23 +269,18 @@ onUnmounted(() => {
               :style="{ width: Math.min(100, (readyCount / READY_THRESHOLD) * 100) + '%' }"
             ></div>
           </div>
-          <p
-            v-if="readyCount >= READY_THRESHOLD && !teamsBalanced"
-            class="text-xs text-amber-600 font-bold mt-2"
-          >
-            각 팀에 최소 1명씩 있어야 시작할 수 있습니다.
-          </p>
-          <p
-            v-else-if="!isLiarGame"
-            class="text-xs text-amber-600 font-bold mt-2"
-          >
+          <p v-if="!isLiarGame" class="text-xs text-amber-600 font-bold mt-2">
             마피아 게임은 준비 중입니다.
           </p>
-          <p v-else-if="canStart || starting" class="text-xs text-green-600 font-bold mt-2">
-            인원이 충족되어 곧 게임이 시작됩니다...
+          <p v-else-if="canStart" class="text-xs text-green-600 font-bold mt-2">
+            인원이 충족되었습니다! 게임을 시작할 수 있습니다.
+          </p>
+          <p v-else class="text-xs text-gray-400 font-bold mt-2">
+            {{ READY_THRESHOLD }}명이 준비하면 게임을 시작할 수 있습니다.
           </p>
         </div>
 
+        <!-- 준비 완료 토글 -->
         <button
           @click="toggleReady"
           :disabled="togglingReady"
@@ -306,6 +292,15 @@ onUnmounted(() => {
           ]"
         >
           {{ iAmReady ? '✓ 준비 완료 (취소하려면 누르세요)' : '준비 완료' }}
+        </button>
+
+        <!-- 게임 시작: 준비 인원이 충족되면 활성화 -->
+        <button
+          @click="startGame"
+          :disabled="!canStart || starting"
+          class="w-full py-4 text-lg font-black rounded-2xl transition-all shadow-lg active:scale-95 bg-gray-800 hover:bg-gray-900 text-white shadow-gray-300 disabled:bg-gray-200 disabled:text-gray-400 disabled:shadow-none disabled:cursor-not-allowed"
+        >
+          {{ starting ? '시작하는 중...' : '게임 시작' }}
         </button>
 
         <button
