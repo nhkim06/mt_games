@@ -46,7 +46,7 @@ const fetchData = async () => {
   room.value = roomData
 
   const [{ data: teamData }, { data: userData }] = await Promise.all([
-    supabase.from('team').select('*').eq('room_id', roomId).order('team_name'),
+    supabase.from('team').select('*').order('team_name'),
     supabase.from('user').select('*').eq('room_id', roomId)
   ])
   users.value = userData || []

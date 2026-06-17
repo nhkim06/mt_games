@@ -73,16 +73,6 @@ const createRoom = async () => {
     return
   }
 
-  // 방마다 기본 두 팀 생성
-  const teams = TEAM_NAMES.map((name) => ({
-    id: uuidv4(),
-    team_name: name,
-    room_id: roomId,
-    score: 0
-  }))
-  const { error: teamError } = await supabase.from('team').insert(teams)
-  if (teamError) console.error('팀 생성 오류:', teamError)
-
   showCreateModal.value = false
   await joinRoom(roomId)
 }
@@ -99,16 +89,11 @@ const joinRoom = async (roomId: string) => {
   joining.value = true
 
   // 로그인 시 선택한 선호 팀을 이 방의 같은 이름 팀에 매칭
+  // 이제 팀은 영구적이므로 team_이름 형식의 ID를 가진다.
   let teamId: string | null = null
   const preferred = localStorage.getItem(PREFERRED_TEAM_KEY)
   if (preferred) {
-    const { data: team } = await supabase
-      .from('team')
-      .select('id')
-      .eq('room_id', roomId)
-      .eq('team_name', preferred)
-      .maybeSingle()
-    teamId = team?.id ?? null
+    teamId = `team_${preferred}`
   }
 
   const { error } = await supabase

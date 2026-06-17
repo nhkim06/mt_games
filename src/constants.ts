@@ -39,7 +39,7 @@ export const TARGET_TYPES = {
 } as const
 
 // 기본 팀 구성
-export const TEAM_NAMES = ['A팀', 'B팀'] as const
+export const TEAM_NAMES = ['cpu', 'gpu', 'ram', 'cache'] as const
 
 // 게임 시작에 필요한 "준비 완료" 인원 수
 export const READY_THRESHOLD = 1

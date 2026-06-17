@@ -22,17 +22,19 @@ const busy = ref(false)
 const activeRooms = computed(() => rooms.value.filter(r => r.status !== ROOM_STATUS.FINISHED))
 const finishedRooms = computed(() => rooms.value.filter(r => r.status === ROOM_STATUS.FINISHED))
 
+const globalTeams = ref<any[]>([])
+
 const fetchRooms = async () => {
-  const { data } = await supabase
-    .from('room')
-    .select('*, team(*), user(*)')
-    .order('status', { ascending: false }) // 대략적으로 WAITING/PLAYING이 위로 오도록
-  rooms.value = data || []
+  const [{ data: roomData }, { data: teamData }] = await Promise.all([
+    supabase.from('room').select('*, user(*)').order('status', { ascending: false }),
+    supabase.from('team').select('*').order('team_name')
+  ])
+  rooms.value = roomData || []
+  globalTeams.value = teamData || []
   loading.value = false
 }
 
-const teamsOf = (room: any) =>
-  (room.team || []).slice().sort((a: any, b: any) => a.team_name.localeCompare(b.team_name))
+const teamsOf = (_room: any) => globalTeams.value
 const membersOf = (room: any, teamId: string) =>
   (room.user || []).filter((u: any) => u.team_id === teamId)
 const memberCount = (room: any) => (room.user ? room.user.length : 0)
@@ -44,7 +46,9 @@ const startGame = async (room: any) => {
     return
   }
   const teams = teamsOf(room)
-  if (!teams.every((t: any) => membersOf(room, t.id).length >= 1)) {
+  // 최소 인원 체크는 해당 방의 멤버를 기준으로 함
+  const hasMembers = teams.some(t => membersOf(room, t.id).length >= 1)
+  if (!hasMembers) {
     alert(MESSAGES.START_NEED_MEMBERS)
     return
   }
