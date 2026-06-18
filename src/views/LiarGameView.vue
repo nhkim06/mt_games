@@ -55,6 +55,7 @@ const iMustGuess = computed(
   () => myRole.value === ROLES.LIAR && !!me.value && allLiarIds.value.includes(me.value.id)
 )
 const nobodyCaught = computed(() => results.value.length > 0 && noLiarCaught(results.value))
+const allTeamsCaughtOpponent = computed(() => results.value.length > 0 && results.value.every((r) => r.oppCaught))
 
 const guessedLiarIds = computed(() =>
   votes.value
@@ -349,11 +350,18 @@ onUnmounted(() => {
         <div v-if="myResult" class="space-y-3">
           <div class="bg-white rounded-2xl border p-5">
             <p class="text-gray-500 text-sm mb-1">우리팀 라이어는 <b class="text-gray-800">{{ userName(myResult.ownDesignatedId) }}</b>(으)로 지목했습니다</p>
-            <p :class="myResult.ownCaught ? 'text-green-600 font-black' : 'text-rose-500 font-bold'">{{ myResult.ownCaught ? '✓ 라이어가 맞습니다 (+10)' : '✗ 라이어가 아닙니다' }}</p>
+            <p :class="myResult.ownCaught ? 'text-green-600 font-black' : 'text-rose-500 font-bold'">{{ myResult.ownCaught ? `✓ 라이어가 맞습니다 (+${dynamicScores.own_liar})` : '✗ 라이어가 아닙니다' }}</p>
           </div>
           <div class="bg-white rounded-2xl border p-5">
             <p class="text-gray-500 text-sm mb-1">상대팀 라이어는 <b class="text-gray-800">{{ userName(myResult.oppDesignatedId) }}</b>(으)로 지목했습니다</p>
-            <p :class="myResult.oppCaught ? 'text-green-600 font-black' : 'text-rose-500 font-bold'">{{ myResult.oppCaught ? '✓ 라이어가 맞습니다!' : '✗ 라이어가 아닙니다' }}</p>
+            <p :class="myResult.oppCaught ? 'text-green-600 font-black' : 'text-rose-500 font-bold'">
+              <template v-if="myResult.oppCaught">
+                ✓ 라이어가 맞습니다!
+                <span v-if="allTeamsCaughtOpponent" class="text-xs text-amber-500 block mt-1">※ 양 팀 모두 맞춰서 점수 무효</span>
+                <span v-else> (+{{ dynamicScores.opp_liar }})</span>
+              </template>
+              <template v-else>✗ 라이어가 아닙니다</template>
+            </p>
           </div>
         </div>
         <div v-if="nobodyCaught" class="bg-amber-50 border border-amber-200 text-amber-700 rounded-2xl p-5 text-center font-bold">

@@ -111,12 +111,15 @@ export function computeScoreDeltas(
   const deltas: Record<string, number> = {}
   for (const r of results) deltas[r.teamId] = 0
 
+  // 참여한 모든 팀이 상대팀 라이어를 잡았는지 확인
+  const allTeamsCaughtOpponent = results.length > 0 && results.every((r) => r.oppCaught)
+
   for (const r of results) {
     // 우리팀 라이어 잡아냄
     if (r.ownCaught) deltas[r.teamId] += scores.own_liar
 
-    // 상대팀 라이어 잡아냄
-    if (r.oppCaught) {
+    // 상대팀 라이어 잡아냄 (단, 모든 팀이 잡은 경우는 제외)
+    if (r.oppCaught && !allTeamsCaughtOpponent) {
       deltas[r.teamId] += scores.opp_liar
     }
   }
