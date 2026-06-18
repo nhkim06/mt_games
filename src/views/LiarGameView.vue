@@ -218,17 +218,12 @@ const nextRound = async () => {
 
     if (claimed && claimed.length > 0) {
       if (nextStatus === ROOM_STATUS.PLAYING) {
-        const { category, secret_word } = pickCategoryAndWord()
-        const roleUpdates = assignRoles(teams.value, users.value)
-        await Promise.all(
-          roleUpdates.map((u) =>
-            supabase.from('user').update({ role: u.role, is_voted: false }).eq('id', u.id)
-          )
-        )
+        // 제시어와 역할은 그대로 유지, 투표 기록만 초기화
+        await supabase.from('user').update({ is_voted: false }).eq('room_id', roomId)
         await supabase.from('votes').delete().eq('room_id', roomId)
         await supabase
           .from('room')
-          .update({ category, secret_word, current_round: room.value.current_round + 1 })
+          .update({ current_round: room.value.current_round + 1 })
           .eq('id', roomId)
       }
     }
