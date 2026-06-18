@@ -218,10 +218,16 @@ const submitAction = async (targetType: string, candidateId: string) => {
   }
 }
 
-const resetRoom = async () => {
-  if (!confirm(MESSAGES.RESET_CONFIRM)) return
-  await supabase.from('user').update({ room_id: null, team_id: null, role: null, is_voted: false, is_alive: true }).eq('room_id', roomId)
-  await supabase.from('room').delete().eq('id', roomId)
+const goLobby = async () => {
+  if (authStore.user) {
+    await supabase
+      .from('user')
+      .update({ room_id: null, team_id: null, role: null, is_voted: false, is_alive: true })
+      .eq('id', authStore.user.id)
+    authStore.user.room_id = undefined
+    authStore.user.team_id = undefined
+    authStore.user.role = null
+  }
   router.replace({ name: 'lobby' })
 }
 
