@@ -74,7 +74,6 @@ const createRoom = async () => {
   newRoomName.value = ''
   await fetchRooms()
   busy.value = false
-  window.location.reload()
 }
 
 const fetchRooms = async () => {

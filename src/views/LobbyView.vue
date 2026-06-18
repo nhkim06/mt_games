@@ -140,8 +140,7 @@ const createRoom = async () => {
   }
 
   showCreateModal.value = false
-  // 방 입장하지 않고 로비 유지 + 새로고침
-  window.location.reload()
+  await fetchRooms()
 }
 
 const joinRoom = async (roomId: string) => {
