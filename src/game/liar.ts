@@ -59,15 +59,13 @@ export interface TeamResult {
   oppCaught: boolean
 }
 
-/** 투표 결과를 팀별 관점으로 계산한다. (양 팀 2개 가정) */
+/** 투표 결과를 팀별 관점으로 계산한다. */
 export function computeResults(teams: TeamRow[], users: UserRow[], votes: VoteRow[]): TeamResult[] {
   return teams.map((team) => {
-    const oppTeam = teams.find((t) => t.id !== team.id) ?? null
+    // 우리팀의 실제 라이어
     const ownLiar = users.find((u) => u.team_id === team.id && u.role === ROLES.LIAR) ?? null
-    const oppLiar = oppTeam
-      ? users.find((u) => u.team_id === oppTeam.id && u.role === ROLES.LIAR) ?? null
-      : null
-
+    
+    // 우리팀 사람들이 투표로 지목한 후보들 (다수결)
     const ownDesignatedId = majority(
       votes
         .filter((v) => v.voter_team_id === team.id && v.target_type === TARGET_TYPES.OWN_TEAM)
@@ -79,34 +77,50 @@ export function computeResults(teams: TeamRow[], users: UserRow[], votes: VoteRo
         .map((v) => v.candidate_id)
     )
 
+    // 검거 여부 판단:
+    // 1. 우리팀 검거: 우리팀이 지목한 사람이 우리팀의 실제 라이어인가?
+    const ownCaught = !!ownLiar && ownDesignatedId === ownLiar.id
+
+    // 2. 상대팀 검거: 우리팀이 지목한 사람이 '다른 팀'의 라이어인가?
+    // (지목된 사람이 존재하고, 역할이 라이어이며, 우리팀 소속이 아닐 때 성공)
+    const designatedUser = users.find(u => u.id === oppDesignatedId)
+    const oppCaught = !!designatedUser && designatedUser.role === ROLES.LIAR && designatedUser.team_id !== team.id
+
     return {
       teamId: team.id,
-      oppTeamId: oppTeam?.id ?? null,
+      oppTeamId: null, // 이제 고정된 상대팀 하나가 아니므로 null 처리하거나 제거 고려
       ownDesignatedId,
       ownLiarId: ownLiar?.id ?? null,
-      ownCaught: !!ownLiar && ownDesignatedId === ownLiar.id,
+      ownCaught,
       oppDesignatedId,
-      oppLiarId: oppLiar?.id ?? null,
-      oppCaught: !!oppLiar && oppDesignatedId === oppLiar.id
+      oppLiarId: designatedUser?.role === ROLES.LIAR ? designatedUser.id : null,
+      oppCaught
     }
   })
 }
 
 /**
- * 검거 점수(+10, +20) 산정. 라이어 제시어 정답(+30)은 라이어 입력 시점에 별도로 부여.
+ * 검거 점수(+10, +20) 산정.
  * - 우리팀 라이어 검거: +10
- * - 우리팀만 상대팀 라이어 검거: +20 (두 팀 모두 상대 라이어를 맞추면 0점)
+ * - 상대팀 라이어 검거: +20 (기존 로직: 우리팀만 맞췄을 때 20이었으나 기획에 따라 조정 가능)
+ * 여기서는 '상대팀 라이어 검거' 성공 시 해당 팀에 점수를 부여하도록 수정.
  */
 export function computeScoreDeltas(results: TeamResult[]): Record<string, number> {
   const deltas: Record<string, number> = {}
   for (const r of results) deltas[r.teamId] = 0
 
   for (const r of results) {
+    // 우리팀 라이어 잡아냄 -> +10
     if (r.ownCaught) deltas[r.teamId] += SCORES.OWN_LIAR
 
-    const oppResult = results.find((x) => x.teamId === r.oppTeamId)
-    const bothCaught = r.oppCaught && !!oppResult?.oppCaught
-    if (r.oppCaught && !bothCaught) deltas[r.teamId] += SCORES.OPPONENT_LIAR_SOLO
+    // 상대팀 라이어 잡아냄 -> +20
+    // (기획: "우리팀만 상대팀 라이어 검거" 조건이 있으나 3팀 이상일 경우 복잡하므로 
+    // 여기서는 지목한 상대가 실제 라이어면 점수를 주는 것으로 일단 구현)
+    if (r.oppCaught) {
+      // 다른 팀들도 이 라이어를 맞췄는지 확인 (독식 여부 판단 필요 시 추가 로직)
+      // 일단은 맞추면 부여
+      deltas[r.teamId] += SCORES.OPPONENT_LIAR_SOLO
+    }
   }
   return deltas
 }
