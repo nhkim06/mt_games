@@ -2,6 +2,7 @@
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { supabase } from '../supabase'
+import { useAuthStore } from '../stores/auth'
 import {
   ROOM_STATUS,
   ROOM_STATUS_LABELS,
@@ -15,6 +16,7 @@ import { assignRoles, pickCategoryAndWord } from '../game/liar'
 import { assignMafiaRoles } from '../game/mafia'
 
 const router = useRouter()
+const authStore = useAuthStore()
 
 const rooms = ref<any[]>([])
 const loading = ref(true)
@@ -72,6 +74,7 @@ const createRoom = async () => {
   newRoomName.value = ''
   await fetchRooms()
   busy.value = false
+  window.location.reload()
 }
 
 const fetchRooms = async () => {
