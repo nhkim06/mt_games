@@ -288,7 +288,7 @@ onUnmounted(() => {
           <div>
             <span
               class="text-xs font-black text-indigo-600 bg-indigo-50 px-2 py-1 rounded uppercase block w-fit mb-1"
-              >ROUND {{ room.current_round }}</span
+              >{{ room.name || room.id }} · ROUND {{ room.current_round }}</span
             >
             <h1 class="text-xl font-black text-gray-800">카테고리 · {{ room.category }}</h1>
           </div>

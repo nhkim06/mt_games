@@ -27,6 +27,7 @@ const settingsTeam = ref('')
 const savingSettings = ref(false)
 
 const newRoomType = ref<string>(GAME_TYPES.LIAR)
+const newRoomName = ref('')
 const selectedTeams = ref<string[]>([...TEAM_NAMES])
 
 const toggleTeamSelection = (team: string) => {
@@ -111,11 +112,16 @@ const setFilter = (f: 'ALL' | keyof typeof GAME_TYPES) => {
 
 const createRoom = async () => {
   if (!authStore.user || !authStore.isAdmin) return
+  if (!newRoomName.value.trim()) {
+    alert('방 이름을 입력해주세요.')
+    return
+  }
   joining.value = true
 
   const roomId = Math.random().toString(36).substring(2, 8).toUpperCase()
   const { error: roomError } = await supabase.from('room').insert({
     id: roomId,
+    name: newRoomName.value.trim(),
     game_type: newRoomType.value,
     status: ROOM_STATUS.WAITING,
     current_round: 1,
@@ -345,11 +351,11 @@ onUnmounted(() => {
           </span>
         </div>
         <h3 class="text-xl font-black mb-2 group-hover:text-indigo-600 transition-colors">
-          {{ room.id }}
+          {{ room.name || room.id }}
         </h3>
         <div class="flex items-center gap-3 text-sm text-gray-500">
+          <span class="text-xs font-bold text-gray-400">ID: {{ room.id }}</span>
           <span>👥 {{ memberCount(room) }}명</span>
-          <span>· 라운드 {{ room.current_round }}</span>
         </div>
       </button>
     </div>
@@ -359,53 +365,69 @@ onUnmounted(() => {
       v-if="showCreateModal"
       class="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50"
     >
-      <div class="bg-white rounded-3xl p-8 max-w-sm w-full animate-in zoom-in-95">
+      <div class="bg-white rounded-3xl p-8 max-w-sm w-full animate-in zoom-in-95 max-h-[90vh] overflow-y-auto">
         <h2 class="text-2xl font-black mb-6">방 생성하기</h2>
-        <label class="block text-sm font-bold text-gray-500 mb-2 uppercase tracking-wider"
-          >게임 종류</label
-        >
-        <div class="grid grid-cols-2 gap-2 mb-6">
-          <button
-            @click="newRoomType = GAME_TYPES.LIAR"
-            :class="[
-              'py-3 border-2 rounded-xl font-bold transition-all',
-              newRoomType === GAME_TYPES.LIAR
-                ? 'border-indigo-600 bg-indigo-50 text-indigo-600'
-                : 'border-gray-100 hover:bg-gray-50 text-gray-500'
-            ]"
-          >
-            라이어
-          </button>
-          <button
-            @click="newRoomType = GAME_TYPES.MAFIA"
-            :class="[
-              'py-3 border-2 rounded-xl font-bold transition-all',
-              newRoomType === GAME_TYPES.MAFIA
-                ? 'border-indigo-600 bg-indigo-50 text-indigo-600'
-                : 'border-gray-100 hover:bg-gray-50 text-gray-500'
-            ]"
-          >
-            마피아
-          </button>
+
+        <div class="space-y-6 mb-8">
+          <div>
+            <label class="block text-sm font-bold text-gray-500 mb-2 uppercase tracking-wider">방 이름</label>
+            <input
+              v-model="newRoomName"
+              type="text"
+              placeholder="예: 즐거운 게임방"
+              maxlength="20"
+              class="w-full px-4 py-3 bg-gray-50 rounded-xl border-2 border-transparent focus:border-indigo-500 outline-none font-bold"
+            />
+          </div>
+
+          <div>
+            <label class="block text-sm font-bold text-gray-500 mb-2 uppercase tracking-wider">게임 종류</label>
+            <div class="grid grid-cols-2 gap-2">
+              <button
+                @click="newRoomType = GAME_TYPES.LIAR"
+                :class="[
+                  'py-3 border-2 rounded-xl font-bold transition-all',
+                  newRoomType === GAME_TYPES.LIAR
+                    ? 'border-indigo-600 bg-indigo-50 text-indigo-600'
+                    : 'border-gray-100 hover:bg-gray-50 text-gray-500'
+                ]"
+              >
+                라이어
+              </button>
+              <button
+                @click="newRoomType = GAME_TYPES.MAFIA"
+                :class="[
+                  'py-3 border-2 rounded-xl font-bold transition-all',
+                  newRoomType === GAME_TYPES.MAFIA
+                    ? 'border-indigo-600 bg-indigo-50 text-indigo-600'
+                    : 'border-gray-100 hover:bg-gray-50 text-gray-500'
+                ]"
+              >
+                마피아
+              </button>
+            </div>
+          </div>
+
+          <div>
+            <label class="block text-sm font-bold text-gray-500 mb-2 uppercase tracking-wider">참여 가능 팀</label>
+            <div class="grid grid-cols-2 gap-2">
+              <button
+                v-for="team in TEAM_NAMES"
+                :key="team"
+                @click="toggleTeamSelection(team)"
+                :class="[
+                  'py-2 border-2 rounded-xl font-bold transition-all uppercase text-xs',
+                  selectedTeams.includes(team)
+                    ? 'border-indigo-600 bg-indigo-50 text-indigo-600'
+                    : 'border-gray-100 text-gray-400'
+                ]"
+              >
+                {{ team }}
+              </button>
+            </div>
+          </div>
         </div>
-        <label class="block text-sm font-bold text-gray-500 mb-2 uppercase tracking-wider"
-          >참여 가능 팀</label
-        >
-        <div class="grid grid-cols-2 gap-2 mb-8">
-          <button
-            v-for="team in TEAM_NAMES"
-            :key="team"
-            @click="toggleTeamSelection(team)"
-            :class="[
-              'py-2 border-2 rounded-xl font-bold transition-all uppercase text-xs',
-              selectedTeams.includes(team)
-                ? 'border-indigo-600 bg-indigo-50 text-indigo-600'
-                : 'border-gray-100 text-gray-400'
-            ]"
-          >
-            {{ team }}
-          </button>
-        </div>
+
         <div class="flex gap-3">
           <button
             @click="showCreateModal = false"

@@ -202,7 +202,7 @@ onUnmounted(() => {
               >대기중</span
             >
           </div>
-          <h1 class="text-2xl font-black text-gray-800">{{ room.id }} 대기룸</h1>
+          <h1 class="text-2xl font-black text-gray-800">{{ room.name || room.id }} 대기룸</h1>
         </div>
         <button @click="leaveRoom" class="text-sm text-gray-500 hover:text-gray-700 hover:underline">
           나가기

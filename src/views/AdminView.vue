@@ -172,8 +172,7 @@ onUnmounted(() => {
                         ? 'bg-orange-100 text-orange-600'
                         : 'bg-blue-100 text-blue-600'
                     ]"
-                    >{{ GAME_TYPE_LABELS[room.game_type] || room.game_type }}</span
-                  >
+                  >{{ GAME_TYPE_LABELS[room.game_type] || room.game_type }}</span>
                   <span
                     :class="[
                       'text-xs font-bold px-2 py-0.5 rounded',
@@ -183,10 +182,10 @@ onUnmounted(() => {
                           ? 'bg-gray-200 text-gray-500'
                           : 'bg-indigo-100 text-indigo-600'
                     ]"
-                    >{{ ROOM_STATUS_LABELS[room.status] || room.status }}</span
-                  >
+                  >{{ ROOM_STATUS_LABELS[room.status] || room.status }}</span>
                 </div>
-                <h3 class="text-xl font-black text-gray-800">{{ room.id }}</h3>
+                <h3 class="text-xl font-black text-gray-800">{{ room.name || room.id }}</h3>
+                <p v-if="room.name" class="text-xs font-bold text-gray-400">ID: {{ room.id }}</p>
               </div>
               <span class="text-sm text-gray-400 font-bold">라운드 {{ room.current_round }}</span>
             </div>
@@ -330,16 +329,15 @@ onUnmounted(() => {
                         ? 'bg-orange-100 text-orange-600'
                         : 'bg-blue-100 text-blue-600'
                     ]"
-                    >{{ GAME_TYPE_LABELS[room.game_type] || room.game_type }}</span
-                  >
-                  <span class="text-xs font-bold px-2 py-0.5 rounded bg-gray-200 text-gray-500"
-                    >종료됨</span
-                  >
+                  >{{ GAME_TYPE_LABELS[room.game_type] || room.game_type }}</span>
+                  <span class="text-xs font-bold px-2 py-0.5 rounded bg-gray-200 text-gray-500">종료됨</span>
                 </div>
-                <h3 class="text-xl font-black text-gray-800">{{ room.id }}</h3>
+                <h3 class="text-xl font-black text-gray-800">{{ room.name || room.id }}</h3>
+                <p v-if="room.name" class="text-xs font-bold text-gray-400">ID: {{ room.id }}</p>
               </div>
               <span class="text-sm text-gray-400 font-bold">라운드 {{ room.current_round }}</span>
             </div>
+
 
             <!-- 팀 점수 (종료된 게임) -->
             <div class="flex flex-wrap gap-2 text-sm text-gray-500 mb-4">
