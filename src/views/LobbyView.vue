@@ -11,7 +11,6 @@ import {
   TEAM_NAMES,
   PREFERRED_TEAM_KEY
 } from '../constants'
-import { v4 as uuidv4 } from 'uuid'
 
 const router = useRouter()
 const authStore = useAuthStore()
@@ -20,12 +19,27 @@ const rooms = ref<any[]>([])
 const filterType = ref<'ALL' | keyof typeof GAME_TYPES>('ALL')
 const loading = ref(false)
 const showCreateModal = ref(false)
-const newRoomType = ref<string>(GAME_TYPES.LIAR)
 const joining = ref(false)
+
 const showSettingsModal = ref(false)
 const settingsName = ref('')
 const settingsTeam = ref('')
 const savingSettings = ref(false)
+
+const newRoomType = ref<string>(GAME_TYPES.LIAR)
+const selectedTeams = ref<string[]>([...TEAM_NAMES])
+
+const toggleTeamSelection = (team: string) => {
+  if (selectedTeams.value.includes(team)) {
+    if (selectedTeams.value.length > 1) {
+      selectedTeams.value = selectedTeams.value.filter((t) => t !== team)
+    } else {
+      alert('최소 하나 이상의 팀을 선택해야 합니다.')
+    }
+  } else {
+    selectedTeams.value.push(team)
+  }
+}
 
 const openSettings = () => {
   settingsName.value = authStore.user?.name || ''
@@ -37,18 +51,15 @@ const saveSettings = async () => {
   if (!authStore.user || !settingsName.value.trim() || savingSettings.value) return
   savingSettings.value = true
   try {
-    const { data, error } = await supabase
+    const { error } = await supabase
       .from('user')
       .update({ name: settingsName.value.trim() })
       .eq('id', authStore.user.id)
-      .select()
-      .single()
-    
+
     if (error) throw error
 
     localStorage.setItem(PREFERRED_TEAM_KEY, settingsTeam.value)
-    
-    // 현재 방에 참여 중이라면 팀 정보도 즉시 업데이트 (방 입장 시 자동 배정 로직과 일치)
+
     if (authStore.user.room_id) {
       await supabase
         .from('user')
@@ -69,7 +80,6 @@ const saveSettings = async () => {
 
 const fetchRooms = async () => {
   loading.value = true
-  // 방 목록은 단순 조회로 가져온다. (다른 테이블 조인이 RLS에 막혀 방이 안 보이는 문제 방지)
   let query = supabase.from('room').select('*').order('id')
   if (filterType.value !== 'ALL') {
     query = query.eq('game_type', filterType.value)
@@ -82,7 +92,6 @@ const fetchRooms = async () => {
   }
   rooms.value = data || []
 
-  // 방별 참여 인원 수를 별도로 집계한다.
   const { data: members } = await supabase.from('user').select('room_id').not('room_id', 'is', null)
   const counts: Record<string, number> = {}
   for (const m of members || []) {
@@ -109,7 +118,8 @@ const createRoom = async () => {
     id: roomId,
     game_type: newRoomType.value,
     status: ROOM_STATUS.WAITING,
-    current_round: 1
+    current_round: 1,
+    allowed_teams: selectedTeams.value.map((t) => `team_${t}`).join(',')
   })
   if (roomError) {
     joining.value = false
@@ -123,17 +133,31 @@ const createRoom = async () => {
 
 const joinRoom = async (roomId: string) => {
   if (!authStore.user || joining.value) return
+  joining.value = true
 
-  // 이미 들어가 있는 방이면 상태(팀/준비) 변경 없이 그대로 재입장
+  const { data: roomData } = await supabase
+    .from('room')
+    .select('allowed_teams')
+    .eq('id', roomId)
+    .maybeSingle()
+
+  const userTeamId = authStore.user.team_id || `team_${localStorage.getItem(PREFERRED_TEAM_KEY)}`
+
+  if (roomData?.allowed_teams) {
+    const allowed = roomData.allowed_teams.split(',')
+    if (!allowed.includes(userTeamId)) {
+      alert('이 방은 소속 팀의 참여가 제한된 방입니다.')
+      joining.value = false
+      return
+    }
+  }
+
   if (authStore.user.room_id === roomId) {
     router.push({ name: 'room', params: { id: roomId } })
+    joining.value = false
     return
   }
 
-  joining.value = true
-
-  // 로그인 시 선택한 선호 팀을 이 방의 같은 이름 팀에 매칭
-  // 이제 팀은 영구적이므로 team_이름 형식의 ID를 가진다.
   let teamId: string | null = null
   const preferred = localStorage.getItem(PREFERRED_TEAM_KEY)
   if (preferred) {
@@ -156,8 +180,6 @@ const joinRoom = async (roomId: string) => {
   router.push({ name: 'room', params: { id: roomId } })
 }
 
-// 진행 중인(게임 중) 방이 있으면 해당 게임 화면으로만 복귀시킨다.
-// 대기중(WAITING) 방은 강제 복귀시키지 않아 로비에서 방 목록을 둘러볼 수 있게 한다.
 const resumeActiveRoom = async () => {
   if (!authStore.user?.room_id) return
   const { data } = await supabase
@@ -193,21 +215,27 @@ onUnmounted(() => {
 
 <template>
   <div class="flex-1 flex flex-col p-6 max-w-4xl mx-auto w-full">
-    <!-- 헤더 -->
     <div class="flex justify-between items-center mb-8">
       <h1 class="text-2xl font-black text-gray-800">로비</h1>
       <div class="flex items-center gap-2 sm:gap-3">
-        <span class="text-gray-600 font-bold text-sm sm:text-base"
-          >{{ authStore.user?.name }}</span
-        >
+        <span class="text-gray-600 font-bold text-sm sm:text-base">{{ authStore.user?.name }}</span>
         <button
           @click="openSettings"
           class="p-2 text-gray-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-xl transition-all"
-          title="설정"
         >
           <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"
+            />
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
+            />
           </svg>
         </button>
         <button
@@ -221,7 +249,6 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <!-- 필터 + 방 만들기 -->
     <div class="flex flex-col sm:flex-row gap-3 mb-6">
       <div class="flex bg-white rounded-xl p-1 shadow-sm border">
         <button
@@ -252,7 +279,6 @@ onUnmounted(() => {
           마피아
         </button>
       </div>
-
       <button
         v-if="authStore.isAdmin"
         @click="showCreateModal = true"
@@ -262,25 +288,23 @@ onUnmounted(() => {
       </button>
     </div>
 
-    <!-- 목록 -->
     <div v-if="loading" class="flex-1 flex items-center justify-center py-20">
       <div class="animate-spin rounded-full h-10 w-10 border-b-2 border-indigo-600"></div>
     </div>
-
     <div
       v-else-if="rooms.length === 0"
       class="flex-1 flex flex-col items-center justify-center bg-white rounded-2xl border-2 border-dashed border-gray-200 p-12"
     >
       <p class="text-gray-500 mb-3 text-lg">생성된 방이 없습니다.</p>
-      <button @click="showCreateModal = true" class="text-indigo-600 font-bold hover:underline">
+      <button
+        v-if="authStore.isAdmin"
+        @click="showCreateModal = true"
+        class="text-indigo-600 font-bold hover:underline"
+      >
         첫 번째 방을 만들어보세요!
       </button>
     </div>
-
-    <div
-      v-else
-      class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4"
-    >
+    <div v-else class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
       <button
         v-for="room in rooms"
         :key="room.id"
@@ -292,7 +316,9 @@ onUnmounted(() => {
           v-if="room.status !== ROOM_STATUS.WAITING"
           class="absolute inset-0 bg-gray-900/5 flex items-center justify-center z-10"
         >
-          <span class="bg-gray-800 text-white text-xs font-black px-3 py-1 rounded-full uppercase tracking-widest shadow-lg">
+          <span
+            class="bg-gray-800 text-white text-xs font-black px-3 py-1 rounded-full uppercase tracking-widest shadow-lg"
+          >
             {{ room.status === ROOM_STATUS.FINISHED ? '종료됨' : '진행 중' }}
           </span>
         </div>
@@ -335,11 +361,10 @@ onUnmounted(() => {
     >
       <div class="bg-white rounded-3xl p-8 max-w-sm w-full animate-in zoom-in-95">
         <h2 class="text-2xl font-black mb-6">방 생성하기</h2>
-
         <label class="block text-sm font-bold text-gray-500 mb-2 uppercase tracking-wider"
           >게임 종류</label
         >
-        <div class="grid grid-cols-2 gap-2 mb-8">
+        <div class="grid grid-cols-2 gap-2 mb-6">
           <button
             @click="newRoomType = GAME_TYPES.LIAR"
             :class="[
@@ -363,7 +388,24 @@ onUnmounted(() => {
             마피아
           </button>
         </div>
-
+        <label class="block text-sm font-bold text-gray-500 mb-2 uppercase tracking-wider"
+          >참여 가능 팀</label
+        >
+        <div class="grid grid-cols-2 gap-2 mb-8">
+          <button
+            v-for="team in TEAM_NAMES"
+            :key="team"
+            @click="toggleTeamSelection(team)"
+            :class="[
+              'py-2 border-2 rounded-xl font-bold transition-all uppercase text-xs',
+              selectedTeams.includes(team)
+                ? 'border-indigo-600 bg-indigo-50 text-indigo-600'
+                : 'border-gray-100 text-gray-400'
+            ]"
+          >
+            {{ team }}
+          </button>
+        </div>
         <div class="flex gap-3">
           <button
             @click="showCreateModal = false"
@@ -389,10 +431,11 @@ onUnmounted(() => {
     >
       <div class="bg-white rounded-3xl p-8 max-w-sm w-full animate-in zoom-in-95">
         <h2 class="text-2xl font-black mb-6">내 설정</h2>
-
         <div class="space-y-6 mb-8">
           <div>
-            <label class="block text-sm font-bold text-gray-500 mb-2 uppercase tracking-wider">이름</label>
+            <label class="block text-sm font-bold text-gray-500 mb-2 uppercase tracking-wider"
+              >이름</label
+            >
             <input
               v-model="settingsName"
               type="text"
@@ -400,9 +443,10 @@ onUnmounted(() => {
               class="w-full px-4 py-3 bg-gray-50 rounded-xl border-2 border-transparent focus:border-indigo-500 outline-none font-bold"
             />
           </div>
-
           <div>
-            <label class="block text-sm font-bold text-gray-500 mb-2 uppercase tracking-wider">선호 팀</label>
+            <label class="block text-sm font-bold text-gray-500 mb-2 uppercase tracking-wider"
+              >선호 팀</label
+            >
             <div class="grid grid-cols-2 gap-2">
               <button
                 v-for="team in TEAM_NAMES"
@@ -420,7 +464,6 @@ onUnmounted(() => {
             </div>
           </div>
         </div>
-
         <div class="flex gap-3">
           <button
             @click="showSettingsModal = false"

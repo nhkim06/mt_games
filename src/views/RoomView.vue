@@ -50,8 +50,15 @@ const fetchData = async () => {
   ])
   
   const currentUsers = userData || []
+  const allTeams = teamData || []
   
-  // 내 정보 찾기 및 자동 팀 배정
+  // 허용된 팀만 필터링
+  if (roomData?.allowed_teams) {
+    const allowedIds = roomData.allowed_teams.split(',')
+    teams.value = allTeams.filter(t => allowedIds.includes(t.id))
+  } else {
+    teams.value = allTeams
+  }
   const myData = currentUsers.find(u => u.id === authStore.user?.id)
   if (myData && !myData.team_id) {
     const { PREFERRED_TEAM_KEY } = await import('../constants')
