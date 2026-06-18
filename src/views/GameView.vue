@@ -33,6 +33,7 @@ const guessInput = ref('')
 const submittingGuess = ref(false)
 const guessResult = ref<'correct' | 'wrong' | ''>('')
 const advancing = ref(false)
+const roleVisible = ref(false)
 
 const me = computed(() => users.value.find((u) => u.id === authStore.user?.id))
 const myRole = computed(() => me.value?.role ?? authStore.user?.role)
@@ -302,27 +303,48 @@ onUnmounted(() => {
         <!-- 역할 카드 -->
         <div
           :class="[
-            'rounded-3xl shadow-xl p-8 mb-8 text-center text-white',
-            myRole === ROLES.LIAR ? 'bg-rose-600' : 'bg-indigo-600'
+            'rounded-3xl shadow-xl p-8 mb-8 text-center text-white transition-all duration-300 relative overflow-hidden',
+            !roleVisible ? 'bg-gray-800' : (myRole === ROLES.LIAR ? 'bg-rose-600' : 'bg-indigo-600')
           ]"
         >
+          <button
+            @click="roleVisible = !roleVisible"
+            class="absolute top-4 right-4 bg-white/20 hover:bg-white/30 p-2 rounded-full transition-colors"
+          >
+            <svg v-if="roleVisible" class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l18 18" />
+            </svg>
+            <svg v-else class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+            </svg>
+          </button>
+
           <h2 class="text-sm opacity-80 mb-2">당신의 역할</h2>
-          <template v-if="myRole === ROLES.LIAR">
-            <h3 class="text-4xl font-black mb-4 tracking-tighter">라이어 🤫</h3>
-            <p class="text-rose-100 leading-relaxed text-sm">
-              제시어를 모르는 척 연기하세요.<br />들켜도 제시어를 맞히면 역전할 수 있습니다!
-            </p>
+          
+          <template v-if="!roleVisible">
+            <h3 class="text-4xl font-black mb-4 tracking-tighter opacity-20">??????</h3>
+            <p class="text-gray-400 text-sm">버튼을 눌러 역할을 확인하세요.</p>
           </template>
+
           <template v-else>
-            <h3 class="text-4xl font-black mb-3 tracking-tighter">시민 🙂</h3>
-            <p class="text-indigo-100 text-sm">
-              제시어는
-              <span class="bg-white text-indigo-600 px-2 py-0.5 rounded font-black mx-1">{{
-                room.secret_word
-              }}</span>
-              입니다.
-            </p>
-            <p class="text-indigo-200 text-xs mt-2 opacity-80">라이어에게 들키지 않게 대화하세요.</p>
+            <template v-if="myRole === ROLES.LIAR">
+              <h3 class="text-4xl font-black mb-4 tracking-tighter animate-in zoom-in-95">라이어 🤫</h3>
+              <p class="text-rose-100 leading-relaxed text-sm">
+                제시어를 모르는 척 연기하세요.<br />들켜도 제시어를 맞히면 역전할 수 있습니다!
+              </p>
+            </template>
+            <template v-else>
+              <h3 class="text-4xl font-black mb-3 tracking-tighter animate-in zoom-in-95">시민 🙂</h3>
+              <p class="text-indigo-100 text-sm">
+                제시어는
+                <span class="bg-white text-indigo-600 px-2 py-0.5 rounded font-black mx-1 shadow-sm">{{
+                  room.secret_word
+                }}</span>
+                입니다.
+              </p>
+              <p class="text-indigo-200 text-xs mt-2 opacity-80">라이어에게 들키지 않게 대화하세요.</p>
+            </template>
           </template>
         </div>
 
