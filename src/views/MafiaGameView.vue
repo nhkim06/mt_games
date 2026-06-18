@@ -166,13 +166,16 @@ const resolveIfAllVotedPlatform = async () => {
 
     if (isTrollWin || victory.winnerTeamId) {
       // 점수 부여
+      const { data: currentTeams } = await supabase.from('team').select('id, score')
+      const teamList = currentTeams || []
+
       if (isTrollWin && executedUser?.team_id) {
-        const team = teams.value.find(t => t.id === executedUser.team_id)
+        const team = teamList.find(t => t.id === executedUser.team_id)
         if (team) {
           await supabase.from('team').update({ score: team.score + 20 }).eq('id', team.id)
         }
       } else if (victory.winnerTeamId) {
-        const team = teams.value.find(t => t.id === victory.winnerTeamId)
+        const team = teamList.find(t => t.id === victory.winnerTeamId)
         if (team) {
           await supabase.from('team').update({ score: team.score + 10 }).eq('id', team.id)
         }

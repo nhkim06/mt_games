@@ -158,8 +158,12 @@ const resolveIfAllVoted = async () => {
       own_liar: dynamicScores.value.own_liar,
       opp_liar: dynamicScores.value.opp_liar
     })
+    
+    // 현재 팀 데이터를 다시 가져와서 최신 점수에 누적한다 (트랜잭션 안전성 고려)
+    const { data: currentTeams } = await supabase.from('team').select('id, score')
+    
     await Promise.all(
-      teams.value.map((t) => {
+      (currentTeams || []).map((t) => {
         const d = deltas[t.id] || 0
         return d ? supabase.from('team').update({ score: t.score + d }).eq('id', t.id) : null
       })
