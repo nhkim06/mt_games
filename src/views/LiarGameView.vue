@@ -46,7 +46,7 @@ const opponentTeamMembers = computed(() =>
   users.value.filter((u) => u.team_id && u.team_id !== me.value?.team_id)
 )
 
-const userName = (id: string | null) => users.value.find((u) => u.id === id)?.name ?? '지목 없음'
+const userName = (id: string | null) => users.value.find((u) => u.id === id)?.name ?? '동표 무효'
 
 const results = computed(() => computeResults(teams.value, users.value, votes.value))
 const myResult = computed(() => results.value.find((r) => r.teamId === me.value?.team_id) ?? null)
