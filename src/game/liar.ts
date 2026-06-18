@@ -25,7 +25,7 @@ export interface VoteRow {
 }
 
 /** 다수결로 가장 많이 지목된 후보를 반환. 동률/무투표면 null. */
-function majority(candidateIds: (string | null)[]): string | null {
+export function majority(candidateIds: (string | null)[]): string | null {
   const counts = new Map<string, number>()
   for (const id of candidateIds) {
     if (!id) continue

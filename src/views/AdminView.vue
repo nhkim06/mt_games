@@ -12,6 +12,7 @@ import {
   TEAM_NAMES
 } from '../constants'
 import { assignRoles, pickCategoryAndWord } from '../game/liar'
+import { assignMafiaRoles } from '../game/mafia'
 
 const router = useRouter()
 
@@ -103,10 +104,6 @@ const memberCount = (room: any) => (room.user ? room.user.length : 0)
 
 const startGame = async (room: any) => {
   if (busy.value) return
-  if (room.game_type !== GAME_TYPES.LIAR) {
-    alert('마피아 게임은 준비 중입니다.')
-    return
-  }
   const teams = teamsOf(room)
   // 최소 인원 체크는 해당 방의 멤버를 기준으로 함
   const hasMembers = teams.some(t => membersOf(room, t.id).length >= 1)
@@ -116,18 +113,30 @@ const startGame = async (room: any) => {
   }
   busy.value = true
   try {
-    const { category, secret_word } = pickCategoryAndWord()
-    const roleUpdates = assignRoles(teams, room.user || [])
+    let roleUpdates: { id: string; role: string }[] = []
+    const nextStatus = room.game_type === GAME_TYPES.MAFIA ? ROOM_STATUS.MAFIA_NIGHT : ROOM_STATUS.PLAYING
+
+    if (room.game_type === GAME_TYPES.LIAR) {
+      const { category, secret_word } = pickCategoryAndWord()
+      roleUpdates = assignRoles(teams, room.user || [])
+      await supabase
+        .from('room')
+        .update({ status: nextStatus, category, secret_word, current_round: 1 })
+        .eq('id', room.id)
+    } else {
+      roleUpdates = assignMafiaRoles(teams, room.user || [])
+      await supabase
+        .from('room')
+        .update({ status: nextStatus, current_round: 1 })
+        .eq('id', room.id)
+    }
+
     await Promise.all(
       roleUpdates.map((u) =>
         supabase.from('user').update({ role: u.role, is_voted: false }).eq('id', u.id)
       )
     )
     await supabase.from('votes').delete().eq('room_id', room.id)
-    await supabase
-      .from('room')
-      .update({ status: ROOM_STATUS.PLAYING, category, secret_word, current_round: 1 })
-      .eq('id', room.id)
     await fetchRooms()
   } finally {
     busy.value = false
@@ -162,8 +171,18 @@ const changeTeam = async (user: any, teamId: string) => {
   await fetchRooms()
 }
 
-const roleLabel = (role: string | null) =>
-  role === ROLES.LIAR ? '라이어' : role === ROLES.CITIZEN ? '시민' : '-'
+const roleLabel = (role: string | null) => {
+  if (!role) return '-'
+  switch(role) {
+    case ROLES.LIAR: return '라이어'
+    case ROLES.CITIZEN: return '시민'
+    case ROLES.BOSS: return '보스'
+    case ROLES.MAFIA: return '마피아'
+    case ROLES.RIGHT_HAND: return '오른팔'
+    case ROLES.TROLL: return '트롤'
+    default: return role
+  }
+}
 
 let channel: any = null
 onMounted(() => {

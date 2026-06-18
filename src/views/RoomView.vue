@@ -8,10 +8,12 @@ import {
   GAME_TYPES,
   GAME_TYPE_LABELS,
   MESSAGES,
-  READY_THRESHOLD
+  READY_THRESHOLD,
+  MAFIA_QUESTIONS
 } from '../constants'
 import { subscribeRoom } from '../lib/realtime'
 import { assignRoles, pickCategoryAndWord } from '../game/liar'
+import { assignMafiaRoles } from '../game/mafia'
 
 const route = useRoute()
 const router = useRouter()
@@ -32,8 +34,9 @@ const readyCount = computed(() => users.value.filter((u) => u.is_voted).length)
 
 const membersOf = (teamId: string) => users.value.filter((u) => u.team_id === teamId)
 const isLiarGame = computed(() => room.value?.game_type === GAME_TYPES.LIAR)
+const isMafiaGame = computed(() => room.value?.game_type === GAME_TYPES.MAFIA)
 // 준비 인원이 기준 인원 수를 충족하면 게임 시작 버튼이 활성화된다.
-const canStart = computed(() => isLiarGame.value && readyCount.value >= READY_THRESHOLD)
+const canStart = computed(() => readyCount.value >= READY_THRESHOLD)
 
 const fetchData = async () => {
   const { data: roomData } = await supabase.from('room').select('*').eq('id', roomId).maybeSingle()
@@ -84,7 +87,15 @@ const fetchData = async () => {
   }
 
   // 기존 멤버인데 게임 중이면 게임 화면으로 이동
-  if (roomData.status === ROOM_STATUS.PLAYING || roomData.status === ROOM_STATUS.RESULT) {
+  const isGameInProgress = [
+    ROOM_STATUS.PLAYING,
+    ROOM_STATUS.RESULT,
+    ROOM_STATUS.MAFIA_NIGHT,
+    ROOM_STATUS.MAFIA_MORNING,
+    ROOM_STATUS.MAFIA_PLATFORM
+  ].includes(roomData.status)
+
+  if (isGameInProgress && isMember) {
     router.replace({ name: 'game', params: { id: roomId } })
     return
   }
@@ -117,26 +128,45 @@ const startGame = async () => {
   starting.value = true
   try {
     // 조건부 업데이트로 WAITING -> PLAYING 전환을 한 명만 성공시킨다.
+    // 마피아는 밤부터 시작, 라이어는 PLAYING(낮)부터 시작
+    const nextStatus = isMafiaGame.value ? ROOM_STATUS.MAFIA_NIGHT : ROOM_STATUS.PLAYING
+    
     const { data: claimed } = await supabase
       .from('room')
-      .update({ status: ROOM_STATUS.PLAYING })
+      .update({ status: nextStatus })
       .eq('id', roomId)
       .eq('status', ROOM_STATUS.WAITING)
       .select()
 
     if (claimed && claimed.length > 0) {
-      const { category, secret_word } = pickCategoryAndWord()
-      const roleUpdates = assignRoles(teams.value, users.value)
+      let roleUpdates: { id: string; role: string }[] = []
+      
+      if (isLiarGame.value) {
+        const { category, secret_word } = pickCategoryAndWord()
+        roleUpdates = assignRoles(teams.value, users.value)
+        await supabase
+          .from('room')
+          .update({ category, secret_word, current_round: 1 })
+          .eq('id', roomId)
+      } else if (isMafiaGame.value) {
+        const initialQuestion = MAFIA_QUESTIONS[Math.floor(Math.random() * MAFIA_QUESTIONS.length)]
+        roleUpdates = assignMafiaRoles(teams.value, users.value)
+        await supabase
+          .from('room')
+          .update({ current_round: 1, category: initialQuestion })
+          .eq('id', roomId)
+      }
+
       await Promise.all(
         roleUpdates.map((u) =>
-          supabase.from('user').update({ role: u.role, is_voted: false }).eq('id', u.id)
+          supabase.from('user').update({ 
+            role: u.role, 
+            is_voted: false, 
+            is_alive: true 
+          }).eq('id', u.id)
         )
       )
       await supabase.from('votes').delete().eq('room_id', roomId)
-      await supabase
-        .from('room')
-        .update({ category, secret_word, current_round: 1 })
-        .eq('id', roomId)
     }
   } catch (e) {
     console.error(e)
@@ -280,10 +310,7 @@ onUnmounted(() => {
               :style="{ width: Math.min(100, (readyCount / READY_THRESHOLD) * 100) + '%' }"
             ></div>
           </div>
-          <p v-if="!isLiarGame" class="text-xs text-amber-600 font-bold mt-2">
-            마피아 게임은 준비 중입니다.
-          </p>
-          <p v-else-if="canStart" class="text-xs text-green-600 font-bold mt-2">
+          <p v-if="canStart" class="text-xs text-green-600 font-bold mt-2">
             인원이 충족되었습니다! 게임을 시작할 수 있습니다.
           </p>
           <p v-else class="text-xs text-gray-400 font-bold mt-2">
