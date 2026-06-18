@@ -109,6 +109,8 @@ const fetchRooms = async () => {
 const memberCounts = ref<Record<string, number>>({})
 const memberCount = (room: any) => memberCounts.value[room.id] || 0
 
+const formatTeamName = (teamId: string) => teamId.replace('team_', '').toUpperCase()
+
 const setFilter = (f: 'ALL' | keyof typeof GAME_TYPES) => {
   filterType.value = f
   fetchRooms()
@@ -358,6 +360,27 @@ onUnmounted(() => {
         <h3 class="text-xl font-black mb-2 group-hover:text-indigo-600 transition-colors">
           {{ room.name || room.id }}
         </h3>
+        
+        <!-- 참여 가능 팀 표시 영역 -->
+        <div class="mb-4">
+          <p class="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1.5">참여 가능 팀</p>
+          <div class="flex flex-wrap gap-1.5">
+            <template v-if="room.allowed_teams">
+              <span v-for="team in room.allowed_teams.split(',')" 
+                :key="team"
+                class="text-[10px] font-bold px-2 py-0.5 rounded-md bg-gray-100 text-gray-600 border border-gray-200"
+              >
+                {{ formatTeamName(team) }}
+              </span>
+            </template>
+            <template v-else>
+              <span class="text-[10px] font-bold px-2 py-0.5 rounded-md bg-indigo-50 text-indigo-600 border border-indigo-100">
+                전체 팀 참여 가능
+              </span>
+            </template>
+          </div>
+        </div>
+
         <div class="flex items-center gap-3 text-sm text-gray-500">
           <span class="text-xs font-bold text-gray-400">ID: {{ room.id }}</span>
           <span>👥 {{ memberCount(room) }}명</span>
