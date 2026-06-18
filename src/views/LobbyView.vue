@@ -101,7 +101,7 @@ const setFilter = (f: 'ALL' | keyof typeof GAME_TYPES) => {
 }
 
 const createRoom = async () => {
-  if (!authStore.user) return
+  if (!authStore.user || !authStore.isAdmin) return
   joining.value = true
 
   const roomId = Math.random().toString(36).substring(2, 8).toUpperCase()
@@ -254,6 +254,7 @@ onUnmounted(() => {
       </div>
 
       <button
+        v-if="authStore.isAdmin"
         @click="showCreateModal = true"
         class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-6 rounded-xl transition-colors shadow-sm sm:ml-auto"
       >
