@@ -194,10 +194,14 @@ const submitGuess = async () => {
 // 다음 라운드: 단 한 클라이언트만 전환. 역할 재배정 + 투표 초기화.
 // 검거된 라이어가 모두 제시어를 제출하기 전에는 진행할 수 없다.
 const nextRound = async () => {
-  if (advancing.value || !canAdvance.value) return
+  if (advancing.value || (!nobodyCaught.value && !canAdvance.value)) return
   advancing.value = true
   try {
-    const nextStatus = nobodyCaught.value ? ROOM_STATUS.PLAYING : ROOM_STATUS.FINISHED
+    // 1. 라이어가 검거됨 -> 종료 (FINISHED)
+    // 2. 아무도 검거 안됨 + 3라운드 미만 -> 다음 라운드 (PLAYING)
+    // 3. 아무도 검거 안됨 + 3라운드 도달 -> 종료 (FINISHED)
+    const isGameOver = !nobodyCaught.value || room.value.current_round >= 3
+    const nextStatus = isGameOver ? ROOM_STATUS.FINISHED : ROOM_STATUS.PLAYING
 
     const { data: claimed } = await supabase
       .from('room')
@@ -430,22 +434,28 @@ onUnmounted(() => {
           v-if="nobodyCaught"
           class="bg-amber-50 border border-amber-200 text-amber-700 rounded-2xl p-5 text-center font-bold"
         >
-          두 팀 다 상대팀 라이어를 맞추지 못했습니다!<br />
-          <span class="text-sm font-medium">라이어들이 제시어를 맞히고 있습니다.</span>
+          <template v-if="room.current_round < 3">
+            두 팀 다 상대팀 라이어를 맞추지 못했습니다!<br />
+            <span class="text-sm font-medium">다음 라운드로 넘어갑니다.</span>
+          </template>
+          <template v-else>
+            3라운드까지 라이어를 잡지 못했습니다!<br />
+            <span class="text-sm font-medium">라이어팀의 승리입니다.</span>
+          </template>
         </div>
 
-        <!-- 제시어 맞히기 -->
-        <div class="mt-4">
+        <!-- 제시어 맞히기 (라이어가 검거되었을 때만 표시) -->
+        <div v-if="!nobodyCaught" class="mt-4">
           <!-- 내가 라이어인 경우 -->
           <div
             v-if="iMustGuess"
             class="bg-rose-50 border-2 border-rose-200 rounded-2xl p-6 text-center"
           >
             <h3 class="text-lg font-black text-rose-600 mb-2">
-              {{ myResult?.oppCaught ? '정체가 들켰습니다!' : '정체를 숨기는 데 성공했습니다!' }}
+              정체가 들켰습니다!
             </h3>
             <p class="text-rose-500 text-sm mb-4">
-              제시어를 제출해야 다음 라운드로 넘어갑니다. 맞히면 +30점!
+              제시어를 제출하세요. 맞히면 +30점!
             </p>
             <template v-if="!iHaveGuessed">
               <input
@@ -479,7 +489,7 @@ onUnmounted(() => {
           <div v-else class="bg-white border rounded-2xl p-6 text-center">
             <p class="text-gray-700 font-bold mb-1">라이어가 제시어를 제출하는 중입니다…</p>
             <p class="text-gray-400 text-sm">
-              제출 {{ submittedCount }} / {{ allLiarIds.length }} · 모두 제출하면 다음 라운드로
+              제출 {{ submittedCount }} / {{ allLiarIds.length }} · 모두 제출하면 결과 화면으로
               넘어갑니다.
             </p>
           </div>
@@ -487,12 +497,12 @@ onUnmounted(() => {
 
         <button
           @click="nextRound"
-          :disabled="advancing || !canAdvance"
+          :disabled="advancing || (!nobodyCaught && !canAdvance)"
           class="w-full py-4 bg-indigo-600 hover:bg-indigo-700 text-white text-lg font-black rounded-2xl transition-colors shadow-lg shadow-indigo-200 active:scale-95 disabled:bg-gray-200 disabled:text-gray-400 disabled:shadow-none disabled:cursor-not-allowed mt-4"
         >
-          {{ nobodyCaught ? '다음 라운드' : '게임 종료' }}
+          {{ !nobodyCaught || room.current_round >= 3 ? '게임 종료' : '다음 라운드' }}
         </button>
-        <p v-if="!canAdvance" class="text-center text-xs text-amber-600 font-bold -mt-2">
+        <p v-if="!nobodyCaught && !canAdvance" class="text-center text-xs text-amber-600 font-bold -mt-2">
           라이어 {{ pendingLiarIds.length }}명이 아직 제시어를 제출하지 않았습니다.
         </p>
       </div>
