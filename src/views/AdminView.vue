@@ -8,7 +8,8 @@ import {
   GAME_TYPES,
   GAME_TYPE_LABELS,
   ROLES,
-  MESSAGES
+  MESSAGES,
+  TEAM_NAMES
 } from '../constants'
 import { assignRoles, pickCategoryAndWord } from '../game/liar'
 
@@ -25,6 +26,53 @@ const finishedRooms = computed(() => rooms.value.filter(r => r.status === ROOM_S
 const globalTeams = ref<any[]>([])
 const settings = ref<any[]>([])
 
+const showCreateModal = ref(false)
+const newRoomName = ref('')
+const newRoomType = ref<string>(GAME_TYPES.LIAR)
+const selectedTeams = ref<string[]>([...TEAM_NAMES])
+
+const toggleTeamSelection = (team: string) => {
+  if (selectedTeams.value.includes(team)) {
+    if (selectedTeams.value.length > 1) {
+      selectedTeams.value = selectedTeams.value.filter((t) => t !== team)
+    } else {
+      alert('최소 하나 이상의 팀을 선택해야 합니다.')
+    }
+  } else {
+    selectedTeams.value.push(team)
+  }
+}
+
+const createRoom = async () => {
+  if (!authStore.user) return
+  if (!newRoomName.value.trim()) {
+    alert('방 이름을 입력해주세요.')
+    return
+  }
+  busy.value = true
+
+  const roomId = Math.random().toString(36).substring(2, 8).toUpperCase()
+  const { error: roomError } = await supabase.from('room').insert({
+    id: roomId,
+    name: newRoomName.value.trim(),
+    game_type: newRoomType.value,
+    status: ROOM_STATUS.WAITING,
+    current_round: 1,
+    allowed_teams: selectedTeams.value.map((t) => `team_${t}`).join(',')
+  })
+  
+  if (roomError) {
+    busy.value = false
+    alert('방 생성 중 오류가 발생했습니다.')
+    return
+  }
+
+  showCreateModal.value = false
+  newRoomName.value = ''
+  await fetchRooms()
+  busy.value = false
+}
+
 const fetchRooms = async () => {
   const [{ data: roomData }, { data: teamData }, { data: settingsData }] = await Promise.all([
     supabase.from('room').select('*, user(*)').order('status', { ascending: false }),
@@ -33,7 +81,13 @@ const fetchRooms = async () => {
   ])
   rooms.value = roomData || []
   globalTeams.value = teamData || []
-  settings.value = settingsData || []
+  
+  if (settingsData) {
+    const order = ['score_own_liar', 'score_opp_liar', 'score_liar_guess']
+    settings.value = settingsData.sort((a, b) => order.indexOf(a.key) - order.indexOf(b.key))
+  } else {
+    settings.value = []
+  }
   loading.value = false
 }
 
@@ -133,18 +187,29 @@ onUnmounted(() => {
         <h1 class="text-2xl font-black text-gray-800">관리자 패널</h1>
         <p class="text-sm text-gray-500">전체 게임 진행 현황 및 팀 포인트 통제</p>
       </div>
-      <div class="flex bg-gray-100 p-1 rounded-xl">
+      <div class="flex items-center gap-4">
         <button
-          @click="router.push({ name: 'lobby' })"
-          class="px-4 py-2 text-sm font-bold text-gray-500 hover:text-gray-700 transition-colors"
+          @click="showCreateModal = true"
+          class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2.5 px-5 rounded-xl transition-all shadow-md shadow-indigo-100 flex items-center gap-2"
         >
-          유저 화면
+          <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
+          </svg>
+          새 방 만들기
         </button>
-        <button
-          class="px-4 py-2 text-sm font-bold bg-white text-indigo-600 rounded-lg shadow-sm"
-        >
-          관리자 화면
-        </button>
+        <div class="flex bg-gray-100 p-1 rounded-xl">
+          <button
+            @click="router.push({ name: 'lobby' })"
+            class="px-4 py-2 text-sm font-bold text-gray-500 hover:text-gray-700 transition-colors"
+          >
+            유저 화면
+          </button>
+          <button
+            class="px-4 py-2 text-sm font-bold bg-white text-indigo-600 rounded-lg shadow-sm"
+          >
+            관리자 화면
+          </button>
+        </div>
       </div>
     </div>
 
@@ -165,17 +230,30 @@ onUnmounted(() => {
         </h2>
         <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <div v-for="s in settings" :key="s.key" class="bg-white rounded-2xl p-4 shadow-sm">
-            <label class="block text-xs font-bold text-gray-400 mb-2 uppercase">
+            <label class="block text-xs font-bold text-gray-400 mb-3 uppercase">
               {{ s.key === 'score_own_liar' ? '우리팀 라이어 검거' : s.key === 'score_opp_liar' ? '상대팀 라이어 검거' : '라이어 정답 맞힘' }}
             </label>
-            <div class="flex items-center gap-3">
+            <div class="flex items-center gap-2">
+              <button
+                @click="updateSetting(s.key, s.value - 10)"
+                class="w-10 h-10 rounded-xl bg-gray-50 border hover:bg-gray-100 text-gray-600 font-black flex items-center justify-center transition-colors active:scale-95"
+              >
+                −
+              </button>
               <input
                 type="number"
                 :value="s.value"
+                step="10"
                 @change="updateSetting(s.key, parseInt(($event.target as HTMLInputElement).value))"
-                class="w-full px-3 py-2 bg-gray-50 border-2 border-transparent focus:border-indigo-500 rounded-xl font-black text-indigo-600 outline-none"
+                class="flex-1 w-full text-center px-2 py-2 bg-transparent border-none font-black text-xl text-indigo-600 outline-none appearance-none"
+                style="-moz-appearance: textfield;"
               />
-              <span class="font-bold text-gray-400 text-sm">점</span>
+              <button
+                @click="updateSetting(s.key, s.value + 10)"
+                class="w-10 h-10 rounded-xl bg-gray-50 border hover:bg-gray-100 text-gray-600 font-black flex items-center justify-center transition-colors active:scale-95"
+              >
+                +
+              </button>
             </div>
           </div>
         </div>
@@ -421,6 +499,92 @@ onUnmounted(() => {
           </div>
         </div>
       </section>
+    </div>
+
+    <!-- 방 생성 모달 -->
+    <div
+      v-if="showCreateModal"
+      class="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50"
+    >
+      <div class="bg-white rounded-3xl p-8 max-w-sm w-full animate-in zoom-in-95 max-h-[90vh] overflow-y-auto">
+        <h2 class="text-2xl font-black mb-6 text-gray-800">새 방 만들기</h2>
+
+        <div class="space-y-6 mb-8 text-left">
+          <div>
+            <label class="block text-sm font-bold text-gray-400 mb-2 uppercase tracking-wider">방 이름</label>
+            <input
+              v-model="newRoomName"
+              type="text"
+              placeholder="예: 즐거운 게임방"
+              maxlength="20"
+              class="w-full px-4 py-3 bg-gray-50 rounded-xl border-2 border-transparent focus:border-indigo-500 outline-none font-bold text-gray-800"
+            />
+          </div>
+
+          <div>
+            <label class="block text-sm font-bold text-gray-400 mb-2 uppercase tracking-wider">게임 종류</label>
+            <div class="grid grid-cols-2 gap-2">
+              <button
+                @click="newRoomType = GAME_TYPES.LIAR"
+                :class="[
+                  'py-3 border-2 rounded-xl font-bold transition-all',
+                  newRoomType === GAME_TYPES.LIAR
+                    ? 'border-indigo-600 bg-indigo-50 text-indigo-600'
+                    : 'border-gray-100 hover:bg-gray-50 text-gray-400'
+                ]"
+              >
+                라이어
+              </button>
+              <button
+                @click="newRoomType = GAME_TYPES.MAFIA"
+                :class="[
+                  'py-3 border-2 rounded-xl font-bold transition-all',
+                  newRoomType === GAME_TYPES.MAFIA
+                    ? 'border-indigo-600 bg-indigo-50 text-indigo-600'
+                    : 'border-gray-100 hover:bg-gray-50 text-gray-400'
+                ]"
+              >
+                마피아
+              </button>
+            </div>
+          </div>
+
+          <div>
+            <label class="block text-sm font-bold text-gray-400 mb-2 uppercase tracking-wider">참여 가능 팀</label>
+            <div class="grid grid-cols-2 gap-2">
+              <button
+                v-for="team in TEAM_NAMES"
+                :key="team"
+                @click="toggleTeamSelection(team)"
+                :class="[
+                  'py-2 border-2 rounded-xl font-bold transition-all uppercase text-xs',
+                  selectedTeams.includes(team)
+                    ? 'border-indigo-600 bg-indigo-50 text-indigo-600'
+                    : 'border-gray-100 text-gray-400'
+                ]"
+              >
+                {{ team }}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="flex gap-3">
+          <button
+            @click="showCreateModal = false"
+            class="flex-1 py-3 bg-gray-100 hover:bg-gray-200 rounded-xl font-bold transition-colors text-gray-500"
+          >
+            취소
+          </button>
+          <button
+            @click="createRoom"
+            :disabled="busy"
+            class="flex-1 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold transition-colors shadow-sm disabled:opacity-50"
+          >
+            생성하기
+          </button>
+        </div>
+      </div>
     </div>
   </div>
 </template>
