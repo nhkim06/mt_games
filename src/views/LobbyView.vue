@@ -196,9 +196,9 @@ onUnmounted(() => {
     <!-- 헤더 -->
     <div class="flex justify-between items-center mb-8">
       <h1 class="text-2xl font-black text-gray-800">로비</h1>
-      <div class="flex items-center gap-3">
-        <span class="hidden sm:inline text-gray-600 font-medium"
-          >{{ authStore.user?.name }} 님</span
+      <div class="flex items-center gap-2 sm:gap-3">
+        <span class="text-gray-600 font-bold text-sm sm:text-base"
+          >{{ authStore.user?.name }}</span
         >
         <button
           @click="openSettings"
