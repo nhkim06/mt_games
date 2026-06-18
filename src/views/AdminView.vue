@@ -23,15 +23,23 @@ const activeRooms = computed(() => rooms.value.filter(r => r.status !== ROOM_STA
 const finishedRooms = computed(() => rooms.value.filter(r => r.status === ROOM_STATUS.FINISHED))
 
 const globalTeams = ref<any[]>([])
+const settings = ref<any[]>([])
 
 const fetchRooms = async () => {
-  const [{ data: roomData }, { data: teamData }] = await Promise.all([
+  const [{ data: roomData }, { data: teamData }, { data: settingsData }] = await Promise.all([
     supabase.from('room').select('*, user(*)').order('status', { ascending: false }),
-    supabase.from('team').select('*').order('team_name')
+    supabase.from('team').select('*').order('team_name'),
+    supabase.from('settings').select('*')
   ])
   rooms.value = roomData || []
   globalTeams.value = teamData || []
+  settings.value = settingsData || []
   loading.value = false
+}
+
+const updateSetting = async (key: string, value: number) => {
+  await supabase.from('settings').update({ value }).eq('key', key)
+  await fetchRooms()
 }
 
 const teamsOf = (_room: any) => globalTeams.value
@@ -149,6 +157,30 @@ onUnmounted(() => {
     </div>
 
     <div v-else class="space-y-12">
+      <!-- 포인트 설정 -->
+      <section class="bg-indigo-50 rounded-3xl p-6 border border-indigo-100">
+        <h2 class="text-lg font-black text-indigo-900 mb-4 flex items-center gap-2">
+          <span class="w-2 h-5 bg-indigo-600 rounded-full"></span>
+          포인트 획득 규칙 설정
+        </h2>
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div v-for="s in settings" :key="s.key" class="bg-white rounded-2xl p-4 shadow-sm">
+            <label class="block text-xs font-bold text-gray-400 mb-2 uppercase">
+              {{ s.key === 'score_own_liar' ? '우리팀 라이어 검거' : s.key === 'score_opp_liar' ? '상대팀 라이어 검거' : '라이어 정답 맞힘' }}
+            </label>
+            <div class="flex items-center gap-3">
+              <input
+                type="number"
+                :value="s.value"
+                @change="updateSetting(s.key, parseInt(($event.target as HTMLInputElement).value))"
+                class="w-full px-3 py-2 bg-gray-50 border-2 border-transparent focus:border-indigo-500 rounded-xl font-black text-indigo-600 outline-none"
+              />
+              <span class="font-bold text-gray-400 text-sm">점</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <!-- 활성 게임 -->
       <section>
         <h2 class="text-lg font-black text-gray-800 mb-4 flex items-center gap-2">
@@ -230,38 +262,12 @@ onUnmounted(() => {
             </div>
 
             <!-- 상세 -->
-            <div v-if="selectedRoomId === room.id" class="mt-5 pt-5 border-t space-y-4">
+            <div v-if="selectedRoomId === room.id" class="mt-5 pt-5 border-t space-y-6">
               <div class="text-sm">
                 <span class="text-gray-400 font-bold">제시어: </span>
                 <span class="font-black text-gray-800">{{ room.secret_word || '미정' }}</span>
                 <span class="text-gray-400 font-bold ml-3">카테고리: </span>
                 <span class="font-bold text-gray-700">{{ room.category || '미정' }}</span>
-              </div>
-
-              <!-- 팀별 점수 조정 -->
-              <div class="space-y-2">
-                <div
-                  v-for="t in teamsOf(room)"
-                  :key="t.id"
-                  class="flex items-center justify-between bg-gray-50 rounded-xl px-3 py-2"
-                >
-                  <span class="font-bold text-gray-700">{{ t.team_name }}</span>
-                  <div class="flex items-center gap-2">
-                    <button
-                      @click="adjustScore(t, -10)"
-                      class="w-7 h-7 rounded-lg bg-white border text-gray-600 font-black hover:bg-gray-100"
-                    >
-                      −
-                    </button>
-                    <span class="w-12 text-center font-black text-indigo-600">{{ t.score }}</span>
-                    <button
-                      @click="adjustScore(t, 10)"
-                      class="w-7 h-7 rounded-lg bg-white border text-gray-600 font-black hover:bg-gray-100"
-                    >
-                      +
-                    </button>
-                  </div>
-                </div>
               </div>
 
               <!-- 플레이어 리스트 (역할 표시 + 팀 수정) -->
@@ -377,6 +383,40 @@ onUnmounted(() => {
                   </span>
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 팀 점수 통합 관리 -->
+      <section class="bg-white rounded-3xl p-6 border-2 border-indigo-100 shadow-sm">
+        <h2 class="text-lg font-black text-gray-800 mb-6 flex items-center gap-2">
+          <span class="w-2 h-5 bg-indigo-600 rounded-full"></span>
+          전체 팀 점수 관리
+        </h2>
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div
+            v-for="t in globalTeams"
+            :key="t.id"
+            class="bg-gray-50 rounded-2xl p-5 border border-transparent hover:border-indigo-200 transition-all"
+          >
+            <div class="flex justify-between items-start mb-4">
+              <span class="text-sm font-black text-gray-400 uppercase">{{ t.team_name }}</span>
+              <span class="text-2xl font-black text-indigo-600">{{ t.score }}</span>
+            </div>
+            <div class="flex gap-2">
+              <button
+                @click="adjustScore(t, -10)"
+                class="flex-1 py-2 bg-white border rounded-xl text-gray-600 font-black hover:bg-gray-100 active:scale-95 transition-all"
+              >
+                −10
+              </button>
+              <button
+                @click="adjustScore(t, 10)"
+                class="flex-1 py-2 bg-white border rounded-xl text-gray-600 font-black hover:bg-gray-100 active:scale-95 transition-all"
+              >
+                +10
+              </button>
             </div>
           </div>
         </div>

@@ -100,26 +100,24 @@ export function computeResults(teams: TeamRow[], users: UserRow[], votes: VoteRo
 }
 
 /**
- * 검거 점수(+10, +20) 산정.
- * - 우리팀 라이어 검거: +10
- * - 상대팀 라이어 검거: +20 (기존 로직: 우리팀만 맞췄을 때 20이었으나 기획에 따라 조정 가능)
- * 여기서는 '상대팀 라이어 검거' 성공 시 해당 팀에 점수를 부여하도록 수정.
+ * 검거 점수 산정.
+ * @param results 팀별 결과
+ * @param scores { own_liar: number, opp_liar: number } 형태의 동적 점수 설정
  */
-export function computeScoreDeltas(results: TeamResult[]): Record<string, number> {
+export function computeScoreDeltas(
+  results: TeamResult[],
+  scores: { own_liar: number; opp_liar: number }
+): Record<string, number> {
   const deltas: Record<string, number> = {}
   for (const r of results) deltas[r.teamId] = 0
 
   for (const r of results) {
-    // 우리팀 라이어 잡아냄 -> +10
-    if (r.ownCaught) deltas[r.teamId] += SCORES.OWN_LIAR
+    // 우리팀 라이어 잡아냄
+    if (r.ownCaught) deltas[r.teamId] += scores.own_liar
 
-    // 상대팀 라이어 잡아냄 -> +20
-    // (기획: "우리팀만 상대팀 라이어 검거" 조건이 있으나 3팀 이상일 경우 복잡하므로 
-    // 여기서는 지목한 상대가 실제 라이어면 점수를 주는 것으로 일단 구현)
+    // 상대팀 라이어 잡아냄
     if (r.oppCaught) {
-      // 다른 팀들도 이 라이어를 맞췄는지 확인 (독식 여부 판단 필요 시 추가 로직)
-      // 일단은 맞추면 부여
-      deltas[r.teamId] += SCORES.OPPONENT_LIAR_SOLO
+      deltas[r.teamId] += scores.opp_liar
     }
   }
   return deltas

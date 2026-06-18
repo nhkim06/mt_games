@@ -34,6 +34,7 @@ const submittingGuess = ref(false)
 const guessResult = ref<'correct' | 'wrong' | ''>('')
 const advancing = ref(false)
 const roleVisible = ref(false)
+const dynamicScores = ref({ own_liar: 10, opp_liar: 20, liar_guess: 30 })
 
 const me = computed(() => users.value.find((u) => u.id === authStore.user?.id))
 const myRole = computed(() => me.value?.role ?? authStore.user?.role)
@@ -90,15 +91,26 @@ const fetchData = async () => {
     return
   }
 
-  const [{ data: teamData }, { data: userData }, { data: voteData }] = await Promise.all([
+  const [{ data: teamData }, { data: userData }, { data: voteData }, { data: settingsData }] = await Promise.all([
     supabase.from('team').select('*').order('team_name'),
     supabase.from('user').select('*').eq('room_id', roomId),
     supabase
       .from('votes')
       .select('*')
       .eq('room_id', roomId)
-      .eq('round', roomData.current_round)
+      .eq('round', roomData.current_round),
+    supabase.from('settings').select('*')
   ])
+  
+  // 포인트 설정 업데이트
+  if (settingsData) {
+    settingsData.forEach(s => {
+      if (s.key === 'score_own_liar') dynamicScores.value.own_liar = s.value
+      if (s.key === 'score_opp_liar') dynamicScores.value.opp_liar = s.value
+      if (s.key === 'score_liar_guess') dynamicScores.value.liar_guess = s.value
+    })
+  }
+
   teams.value = teamData || []
   users.value = userData || []
   votes.value = voteData || []
@@ -149,7 +161,10 @@ const resolveIfAllVoted = async () => {
     .select()
 
   if (claimed && claimed.length > 0) {
-    const deltas = computeScoreDeltas(results.value)
+    const deltas = computeScoreDeltas(results.value, {
+      own_liar: dynamicScores.value.own_liar,
+      opp_liar: dynamicScores.value.opp_liar
+    })
     await Promise.all(
       teams.value.map((t) => {
         const d = deltas[t.id] || 0
@@ -159,7 +174,7 @@ const resolveIfAllVoted = async () => {
   }
 }
 
-// 라이어 제시어 제출. 제출 사실을 votes 테이블에 기록(공유)하고, 정답이면 +30.
+// 라이어 제시어 제출. 제출 사실을 votes 테이블에 기록(공유)하고, 정답이면 점수 부여.
 const submitGuess = async () => {
   if (submittingGuess.value || iHaveGuessed.value || !me.value) return
   submittingGuess.value = true
@@ -180,7 +195,7 @@ const submitGuess = async () => {
     if (correct && myTeam.value) {
       await supabase
         .from('team')
-        .update({ score: myTeam.value.score + 30 })
+        .update({ score: myTeam.value.score + dynamicScores.value.liar_guess })
         .eq('id', myTeam.value.id)
     }
     await fetchData()
