@@ -107,7 +107,9 @@ const fetchData = async () => {
     })
   }
 
-  teams.value = teamData || []
+  teams.value = (teamData || []).filter(t => 
+    (userData || []).some(u => u.team_id === t.id)
+  )
   users.value = userData || []
   votes.value = voteData || []
   loading.value = false

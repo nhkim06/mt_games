@@ -75,7 +75,9 @@ const fetchData = async () => {
       .eq('round', roomData.current_round)
   ])
   
-  teams.value = teamData || []
+  teams.value = (teamData || []).filter(t => 
+    (userData || []).some(u => u.team_id === t.id)
+  )
   users.value = userData || []
   votes.value = voteData || []
   loading.value = false

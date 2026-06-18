@@ -100,7 +100,6 @@ const fetchData = async () => {
     return
   }
 
-  teams.value = teamData || []
   loading.value = false
 }
 

@@ -99,7 +99,13 @@ const updateSetting = async (key: string, value: number) => {
   await fetchRooms()
 }
 
-const teamsOf = (_room: any) => globalTeams.value
+const teamsOf = (room: any) => {
+  if (room.allowed_teams) {
+    const allowedIds = room.allowed_teams.split(',')
+    return globalTeams.value.filter(t => allowedIds.includes(t.id))
+  }
+  return globalTeams.value
+}
 const membersOf = (room: any, teamId: string) =>
   (room.user || []).filter((u: any) => u.team_id === teamId)
 const memberCount = (room: any) => (room.user ? room.user.length : 0)
