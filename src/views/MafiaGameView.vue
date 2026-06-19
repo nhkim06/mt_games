@@ -318,7 +318,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div :class="['flex-1 flex flex-col w-full transition-colors duration-500', room?.status === ROOM_STATUS.MAFIA_NIGHT ? 'bg-gray-900' : 'bg-gray-50']">
+  <div :class="['flex-1 flex flex-col w-full transition-colors duration-500', !isAlive ? 'bg-gray-300' : (room?.status === ROOM_STATUS.MAFIA_NIGHT ? 'bg-gray-900' : 'bg-gray-50')]">
     <div class="flex-1 flex flex-col p-6 max-w-2xl mx-auto w-full">
       <div v-if="loading" class="flex-1 flex items-center justify-center py-20">
         <div class="animate-spin rounded-full h-10 w-10 border-b-2 border-indigo-600"></div>
