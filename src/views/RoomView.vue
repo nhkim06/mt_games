@@ -35,8 +35,8 @@ const readyCount = computed(() => users.value.filter((u) => u.is_voted).length)
 const membersOf = (teamId: string) => users.value.filter((u) => u.team_id === teamId)
 const isLiarGame = computed(() => room.value?.game_type === GAME_TYPES.LIAR)
 const isMafiaGame = computed(() => room.value?.game_type === GAME_TYPES.MAFIA)
-// 준비 인원이 기준 인원 수를 충족하면 게임 시작 버튼이 활성화된다.
-const canStart = computed(() => readyCount.value >= READY_THRESHOLD)
+// 모든 참여자가 준비 완료를 눌러야 게임 시작 버튼이 활성화된다.
+const canStart = computed(() => users.length > 0 && users.value.every((u) => u.is_voted))
 
 const fetchData = async () => {
   const { data: roomData } = await supabase.from('room').select('*').eq('id', roomId).maybeSingle()
@@ -301,19 +301,19 @@ onUnmounted(() => {
         <div class="bg-white rounded-2xl border p-4">
           <div class="flex justify-between text-sm font-bold mb-2">
             <span class="text-gray-600">게임 시작까지</span>
-            <span class="text-indigo-600">{{ readyCount }} / {{ READY_THRESHOLD }}명 준비</span>
+            <span class="text-indigo-600">{{ readyCount }} / {{ users.length }}명 준비</span>
           </div>
           <div class="w-full h-2.5 bg-gray-100 rounded-full overflow-hidden">
             <div
               class="h-full bg-indigo-600 transition-all"
-              :style="{ width: Math.min(100, (readyCount / READY_THRESHOLD) * 100) + '%' }"
+              :style="{ width: users.length > 0 ? (readyCount / users.length) * 100 + '%' : '0%' }"
             ></div>
           </div>
           <p v-if="canStart" class="text-xs text-green-600 font-bold mt-2">
-            인원이 충족되었습니다! 게임을 시작할 수 있습니다.
+            모두 준비되었습니다! 게임을 시작할 수 있습니다.
           </p>
           <p v-else class="text-xs text-gray-400 font-bold mt-2">
-            {{ READY_THRESHOLD }}명이 준비하면 게임을 시작할 수 있습니다.
+            모든 참여자가 준비 완료를 눌러야 게임을 시작할 수 있습니다.
           </p>
         </div>
 
