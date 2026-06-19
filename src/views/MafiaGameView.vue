@@ -3,7 +3,7 @@ import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { supabase } from '../supabase'
 import { useAuthStore } from '../stores/auth'
-import { ROOM_STATUS, ROLES, TARGET_TYPES, MESSAGES, MAFIA_QUESTIONS } from '../constants'
+import { ROOM_STATUS, ROLES, TARGET_TYPES, MESSAGES, MAFIA_QUESTIONS, SCORES } from '../constants'
 import { subscribeRoom } from '../lib/realtime'
 import {
   processNightKills,
@@ -36,9 +36,10 @@ const hasVoted = computed(() => !!me.value?.is_voted)
 const aliveUsers = computed(() => users.value.filter(u => u.is_alive !== false))
 const deadUsers = computed(() => users.value.filter(u => u.is_alive === false))
 
-const nightKilledIds = computed(() => {
+// 밤 전환 시 room.secret_word(마피아 게임에서는 미사용 컬럼)에 저장해 둔 사망자 목록을 읽는다.
+const nightKilledIds = computed<string[]>(() => {
   if (room.value?.status !== ROOM_STATUS.MAFIA_MORNING) return []
-  return processNightKills(users.value, votes.value)
+  return (room.value.secret_word || '').split(',').filter(Boolean)
 })
 
 const executionCandidateId = computed(() => {
@@ -93,21 +94,65 @@ const fetchData = async () => {
   if (roomData.status === ROOM_STATUS.MAFIA_PLATFORM) await resolveIfAllVotedPlatform()
 }
 
-// 밤: 전원 투표 시 아침으로 전환
+// 승리가 결정되면 점수 부여 후 게임 종료
+const finishWithWinner = async (winnerTeamId: string, points: number) => {
+  const { data: currentTeams } = await supabase.from('team').select('id, score')
+  const team = (currentTeams || []).find((t) => t.id === winnerTeamId)
+  if (team) {
+    await supabase.from('team').update({ score: team.score + points }).eq('id', team.id)
+  }
+  await supabase.from('room').update({ status: ROOM_STATUS.FINISHED }).eq('id', roomId)
+}
+
+// 다음 밤으로 진행 (fromStatus에서만 단 한 명이 전환에 성공해 중복 처리를 막는다)
+const advanceToNight = async (fromStatus: string) => {
+  const nextQuestion = MAFIA_QUESTIONS[Math.floor(Math.random() * MAFIA_QUESTIONS.length)]
+  const { data: claimed } = await supabase
+    .from('room')
+    .update({
+      status: ROOM_STATUS.MAFIA_NIGHT,
+      current_round: room.value.current_round + 1,
+      category: nextQuestion,
+      secret_word: null
+    })
+    .eq('id', roomId)
+    .eq('status', fromStatus)
+    .select()
+
+  if (claimed && claimed.length > 0) {
+    await supabase.from('votes').delete().eq('room_id', roomId)
+    await supabase.from('user').update({ is_voted: false }).eq('room_id', roomId)
+  }
+}
+
+// 밤: 전원 제출 시 처치를 적용하고 아침으로 전환
 const resolveIfAllVotedNight = async () => {
   const allVoted = aliveUsers.value.length > 0 && aliveUsers.value.every((u) => u.is_voted)
   if (!allVoted) return
 
+  // 오른팔 보호를 반영한 실제 처치 대상
+  const nightKills = processNightKills(users.value, votes.value)
+
   const { data: claimed } = await supabase
     .from('room')
-    .update({ status: ROOM_STATUS.MAFIA_MORNING })
+    .update({ status: ROOM_STATUS.MAFIA_MORNING, secret_word: nightKills.join(',') })
     .eq('id', roomId)
     .eq('status', ROOM_STATUS.MAFIA_NIGHT)
     .select()
 
   if (claimed && claimed.length > 0) {
-    // 투표 초기화 준비
+    // 밤에 죽은 사람을 바로 사망 처리 → 아침 투표에서 비활성화된다
+    if (nightKills.length > 0) {
+      await supabase.from('user').update({ is_alive: false }).in('id', nightKills)
+    }
     await supabase.from('user').update({ is_voted: false }).eq('room_id', roomId)
+
+    // 보스가 밤에 죽었다면 즉시 게임 종료
+    const { data: latestUsers } = await supabase.from('user').select('*').eq('room_id', roomId)
+    const victory = checkMafiaVictory(latestUsers || [])
+    if (victory.winnerTeamId) {
+      await finishWithWinner(victory.winnerTeamId, SCORES.BOSS_KILL)
+    }
   }
 }
 
@@ -128,74 +173,52 @@ const resolveIfAllVotedMorning = async () => {
   }
 }
 
-// 재판: 전원 투표 시 다시 밤으로 (또는 종료)
+// 재판: 결과를 처리하고 다시 밤으로 (또는 종료)
 const resolveIfAllVotedPlatform = async () => {
+  const candidateId = executionCandidateId.value
+
+  // 동표/무투표 → 재판 없이 밤으로
+  if (!candidateId) {
+    await advanceToNight(ROOM_STATUS.MAFIA_PLATFORM)
+    return
+  }
+
   const allVoted = aliveUsers.value.length > 0 && aliveUsers.value.every((u) => u.is_voted)
   if (!allVoted) return
 
-  // 결과 처리 (누군가 죽었는지)
-  const candidateId = executionCandidateId.value
-  const executed = candidateId ? isExecuted(votes.value, candidateId, aliveUsers.value.length) : false
-  
+  const executed = isExecuted(votes.value, candidateId, aliveUsers.value.length)
+  const executedUser = users.value.find((u) => u.id === candidateId)
+
+  // 임시 상태로 락 (한 명만 결과 처리)
   const { data: claimed } = await supabase
     .from('room')
-    .update({ status: 'PROCESSING_PLATFORM' as any }) // 임시 상태로 락
+    .update({ status: 'PROCESSING_PLATFORM' as any })
     .eq('id', roomId)
     .eq('status', ROOM_STATUS.MAFIA_PLATFORM)
     .select()
 
-  if (claimed && claimed.length > 0) {
-    let finalKilledId = ''
-    if (executed && candidateId) {
-      await supabase.from('user').update({ is_alive: false }).eq('id', candidateId)
-      finalKilledId = candidateId
-    }
-    
-    // 밤에 죽기로 했던 사람들도 여기서 실제로 죽임 처리
-    const nightKills = processNightKills(users.value, votes.value)
-    if (nightKills.length > 0) {
-        await supabase.from('user').update({ is_alive: false }).in('id', nightKills)
-    }
+  if (!claimed || claimed.length === 0) return
 
-    // 최신 유저 정보 다시 가져와서 승리 체크
-    const { data: latestUsers } = await supabase.from('user').select('*').eq('room_id', roomId)
-    const currentUsers = latestUsers || []
-    const victory = checkMafiaVictory(currentUsers)
-    
-    // 트롤 승리 별도 체크
-    const executedUser = users.value.find(u => u.id === candidateId)
-    const isTrollWin = executed && executedUser?.role === ROLES.TROLL
+  if (executed) {
+    await supabase.from('user').update({ is_alive: false }).eq('id', candidateId)
 
-    if (isTrollWin || victory.winnerTeamId) {
-      // 점수 부여
-      const { data: currentTeams } = await supabase.from('team').select('id, score')
-      const teamList = currentTeams || []
-
-      if (isTrollWin && executedUser?.team_id) {
-        const team = teamList.find(t => t.id === executedUser.team_id)
-        if (team) {
-          await supabase.from('team').update({ score: team.score + 20 }).eq('id', team.id)
-        }
-      } else if (victory.winnerTeamId) {
-        const team = teamList.find(t => t.id === victory.winnerTeamId)
-        if (team) {
-          await supabase.from('team').update({ score: team.score + 10 }).eq('id', team.id)
-        }
-      }
-
-      await supabase.from('room').update({ status: ROOM_STATUS.FINISHED }).eq('id', roomId)
-    } else {
-      // 다음 라운드(밤)로 진행
-      const nextQuestion = MAFIA_QUESTIONS[Math.floor(Math.random() * MAFIA_QUESTIONS.length)]
-      await supabase.from('room').update({ 
-        status: ROOM_STATUS.MAFIA_NIGHT, 
-        current_round: room.value.current_round + 1,
-        category: nextQuestion
-      }).eq('id', roomId)
-      await supabase.from('votes').delete().eq('room_id', roomId)
-      await supabase.from('user').update({ is_voted: false }).eq('room_id', roomId)
+    // 처형당한 사람이 트롤이면 트롤 승
+    if (executedUser?.role === ROLES.TROLL && executedUser.team_id) {
+      await finishWithWinner(executedUser.team_id, SCORES.TROLL_WIN)
+      return
     }
   }
+
+  // 보스가 처형되어 승부가 갈렸는지 확인
+  const { data: latestUsers } = await supabase.from('user').select('*').eq('room_id', roomId)
+  const victory = checkMafiaVictory(latestUsers || [])
+  if (victory.winnerTeamId) {
+    await finishWithWinner(victory.winnerTeamId, SCORES.BOSS_KILL)
+    return
+  }
+
+  // 다음 밤으로 진행
+  await advanceToNight('PROCESSING_PLATFORM')
 }
 
 const submitAction = async (targetType: string, candidateId: string) => {
@@ -230,6 +253,17 @@ const goLobby = async () => {
     authStore.user.team_id = undefined
     authStore.user.role = null
   }
+  router.replace({ name: 'lobby' })
+}
+
+// 리셋: 같은 방 모든 인원을 내보내고 방 삭제
+const resetRoom = async () => {
+  if (!confirm(MESSAGES.RESET_CONFIRM)) return
+  await supabase
+    .from('user')
+    .update({ room_id: null, team_id: null, role: null, is_voted: false, is_alive: true })
+    .eq('room_id', roomId)
+  await supabase.from('room').delete().eq('id', roomId) // team/votes는 ON DELETE CASCADE
   router.replace({ name: 'lobby' })
 }
 
@@ -310,7 +344,10 @@ const getRoleLabel = (role: string) => {
           <div v-else-if="!hasVoted" class="space-y-6">
             <div class="bg-gray-800 border border-gray-700 rounded-2xl p-6 text-white">
                 <h3 class="text-indigo-400 font-bold mb-2">밤의 임무</h3>
-                <p v-if="myRole === ROLES.MAFIA" class="text-xl font-black">처치할 대상을 선택하십시오.</p>
+                <template v-if="myRole === ROLES.MAFIA">
+                    <p class="text-xl font-black">처치할 대상을 선택하십시오.</p>
+                    <p v-if="nightQuestion" class="text-sm text-gray-400 mt-2">오늘의 질문: {{ nightQuestion }}</p>
+                </template>
                 <p v-else class="text-xl font-black">{{ nightQuestion || '참여자를 선택하십시오.' }}</p>
             </div>
             
@@ -410,7 +447,7 @@ const getRoleLabel = (role: string) => {
                   </div>
               </div>
           </div>
-          <button @click="router.replace({ name: 'lobby' })" class="w-full py-4 bg-indigo-600 text-white text-lg font-black rounded-2xl shadow-lg">로비로 돌아가기</button>
+          <button @click="goLobby" class="w-full py-4 bg-indigo-600 text-white text-lg font-black rounded-2xl shadow-lg">로비로 돌아가기</button>
         </div>
 
         <!-- 플레이어 목록 (푸터) -->

@@ -50,6 +50,7 @@ create table public.user (
   team_id character varying null,
   role character varying null,
   is_voted boolean not null default false,
+  is_alive boolean not null default true,
   constraint user_pkey primary key (id),
   constraint user_room_id_fkey foreign KEY (room_id) references room (id) on delete set null,
   constraint user_team_id_fkey foreign KEY (team_id) references team (id) on delete set null

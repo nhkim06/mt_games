@@ -36,7 +36,7 @@ export function assignMafiaRoles(teams: TeamRow[], users: UserRow[]): { id: stri
     const shuffled = [...members].sort(() => Math.random() - 0.5)
     
     shuffled.forEach((m, i) => {
-      let role = ROLES.CITIZEN
+      let role: string = ROLES.CITIZEN
       if (i === 0) role = ROLES.BOSS
       else if (i === 1) role = ROLES.MAFIA
       else if (i === 2) role = ROLES.RIGHT_HAND
@@ -92,14 +92,14 @@ export function getExecutionCandidate(votes: VoteRow[]): string | null {
   return majority(nominationVotes)
 }
 
-/** 재판 결과 (찬성이 과반수 이상인지) */
+/** 재판 결과 (찬성이 절반 이상인지) */
 export function isExecuted(votes: VoteRow[], candidateId: string, totalAliveCount: number): boolean {
-  const agreementVotes = votes.filter(v => 
-    v.target_type === TARGET_TYPES.EXECUTION_AGREEMENT && 
+  const agreementVotes = votes.filter(v =>
+    v.target_type === TARGET_TYPES.EXECUTION_AGREEMENT &&
     v.candidate_id === candidateId
   )
-  
-  return agreementVotes.length > totalAliveCount / 2
+
+  return agreementVotes.length >= totalAliveCount / 2
 }
 
 /** 승리 조건을 체크한다. */
