@@ -52,6 +52,44 @@ const executionCandidate = computed(() =>
   users.value.find(u => u.id === executionCandidateId.value)
 )
 
+const isMyTeamWinner = computed(() => {
+  if (!room.value || room.value.status !== ROOM_STATUS.FINISHED) return false
+  
+  // 1. 만약 secret_word에 winnerTeamId가 저장되어 있다면 그걸 우선 사용한다.
+  const winnerTeamId = room.value.secret_word
+  if (winnerTeamId) {
+    return me.value?.team_id === winnerTeamId
+  }
+  
+  // 2. 만약 secret_word가 없다면 현재 살아있는 보스가 있는지 체크해 본다.
+  const aliveBosses = users.value.filter(u => u.role === ROLES.BOSS && u.is_alive !== false)
+  const teamsWithAliveBoss = Array.from(new Set(aliveBosses.map(u => u.team_id).filter(Boolean)))
+  
+  if (teamsWithAliveBoss.length === 1) {
+    return me.value?.team_id === teamsWithAliveBoss[0]
+  }
+  
+  return false
+})
+
+const winnerTeam = computed(() => {
+  if (!room.value || room.value.status !== ROOM_STATUS.FINISHED) return null
+  
+  const winnerTeamId = room.value.secret_word
+  if (winnerTeamId) {
+    return teams.value.find(t => t.id === winnerTeamId) || null
+  }
+  
+  const aliveBosses = users.value.filter(u => u.role === ROLES.BOSS && u.is_alive !== false)
+  const teamsWithAliveBoss = Array.from(new Set(aliveBosses.map(u => u.team_id).filter(Boolean)))
+  
+  if (teamsWithAliveBoss.length === 1) {
+    return teams.value.find(t => t.id === teamsWithAliveBoss[0]) || null
+  }
+  
+  return null
+})
+
 const fetchData = async () => {
   const { data: roomData } = await supabase.from('room').select('*').eq('id', roomId).maybeSingle()
   if (!roomData) {
@@ -101,7 +139,7 @@ const finishWithWinner = async (winnerTeamId: string, points: number) => {
   if (team) {
     await supabase.from('team').update({ score: team.score + points }).eq('id', team.id)
   }
-  await supabase.from('room').update({ status: ROOM_STATUS.FINISHED }).eq('id', roomId)
+  await supabase.from('room').update({ status: ROOM_STATUS.FINISHED, secret_word: winnerTeamId }).eq('id', roomId)
 }
 
 // 다음 밤으로 진행 (fromStatus에서만 단 한 명이 전환에 성공해 중복 처리를 막는다)
@@ -439,7 +477,12 @@ const getRoleLabel = (role: string) => {
         <div v-else-if="room.status === ROOM_STATUS.FINISHED" class="space-y-6 text-center">
           <h2 class="text-4xl font-black mb-4">게임 종료 🏁</h2>
           <div class="bg-white border rounded-3xl p-10 mb-6">
-              <p class="text-indigo-600 font-black text-xl mb-4">승리!</p>
+              <p v-if="me?.team_id" :class="[isMyTeamWinner ? 'text-green-600' : 'text-rose-600', 'font-black text-2xl mb-4']">
+                {{ isMyTeamWinner ? '우리팀 승리! 🎉' : '우리팀 패배... 😢' }}
+              </p>
+              <p v-else class="text-indigo-600 font-black text-xl mb-4">
+                게임 종료! (우승팀: {{ winnerTeam?.team_name || '알 수 없음' }})
+              </p>
               <div class="grid grid-cols-2 gap-4">
                   <div v-for="team in teams" :key="team.id" class="p-4 rounded-2xl bg-gray-50">
                       <p class="text-xs text-gray-400 font-bold mb-1">{{ team.team_name }}</p>
