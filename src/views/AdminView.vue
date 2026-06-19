@@ -86,7 +86,7 @@ const fetchRooms = async () => {
   globalTeams.value = teamData || []
   
   if (settingsData) {
-    const order = ['score_own_liar', 'score_opp_liar', 'score_liar_guess']
+    const order = ['score_own_liar', 'score_opp_liar', 'score_liar_guess', 'score_boss_kill', 'score_troll_win']
     settings.value = settingsData.sort((a, b) => order.indexOf(a.key) - order.indexOf(b.key))
   } else {
     settings.value = []
@@ -251,36 +251,81 @@ onUnmounted(() => {
     <div v-else class="space-y-12">
       <!-- 포인트 설정 -->
       <section class="bg-indigo-50 rounded-3xl p-6 border border-indigo-100">
-        <h2 class="text-lg font-black text-indigo-900 mb-4 flex items-center gap-2">
+        <h2 class="text-lg font-black text-indigo-900 mb-6 flex items-center gap-2">
           <span class="w-2 h-5 bg-indigo-600 rounded-full"></span>
           포인트 획득 규칙 설정
         </h2>
-        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <div v-for="s in settings" :key="s.key" class="bg-white rounded-2xl p-4 shadow-sm">
-            <label class="block text-xs font-bold text-gray-400 mb-3 uppercase">
-              {{ s.key === 'score_own_liar' ? '우리팀 라이어 검거' : s.key === 'score_opp_liar' ? '상대팀 라이어 검거' : '라이어 정답 맞힘' }}
-            </label>
-            <div class="flex items-center gap-2">
-              <button
-                @click="updateSetting(s.key, s.value - 10)"
-                class="w-10 h-10 rounded-xl bg-gray-50 border hover:bg-gray-100 text-gray-600 font-black flex items-center justify-center transition-colors active:scale-95"
-              >
-                −
-              </button>
-              <input
-                type="number"
-                :value="s.value"
-                step="10"
-                @change="updateSetting(s.key, parseInt(($event.target as HTMLInputElement).value))"
-                class="flex-1 w-full text-center px-2 py-2 bg-transparent border-none font-black text-xl text-indigo-600 outline-none appearance-none"
-                style="-moz-appearance: textfield;"
-              />
-              <button
-                @click="updateSetting(s.key, s.value + 10)"
-                class="w-10 h-10 rounded-xl bg-gray-50 border hover:bg-gray-100 text-gray-600 font-black flex items-center justify-center transition-colors active:scale-95"
-              >
-                +
-              </button>
+        
+        <div class="space-y-6">
+          <!-- 라이어 게임 설정 -->
+          <div>
+            <h3 class="text-sm font-black text-indigo-800 mb-3 flex items-center gap-2">
+                라이어 게임
+            </h3>
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              <div v-for="s in settings.filter(s => ['score_own_liar', 'score_opp_liar', 'score_liar_guess'].includes(s.key))" :key="s.key" class="bg-white rounded-2xl p-4 shadow-sm">
+                <label class="block text-xs font-bold text-gray-400 mb-3 uppercase truncate" :title="s.key">
+                  {{ s.key === 'score_own_liar' ? '우리팀 라이어 검거' : s.key === 'score_opp_liar' ? '상대팀 라이어 검거' : '라이어 정답 맞힘' }}
+                </label>
+                <div class="flex items-center gap-2">
+                  <button
+                    @click="updateSetting(s.key, s.value - 10)"
+                    class="w-8 h-8 rounded-lg bg-gray-50 border hover:bg-gray-100 text-gray-600 font-black flex items-center justify-center transition-colors active:scale-95"
+                  >
+                    −
+                  </button>
+                  <input
+                    type="number"
+                    :value="s.value"
+                    step="10"
+                    @change="updateSetting(s.key, parseInt(($event.target as HTMLInputElement).value))"
+                    class="flex-1 w-full text-center px-1 bg-transparent border-none font-black text-lg text-indigo-600 outline-none appearance-none"
+                    style="-moz-appearance: textfield;"
+                  />
+                  <button
+                    @click="updateSetting(s.key, s.value + 10)"
+                    class="w-8 h-8 rounded-lg bg-gray-50 border hover:bg-gray-100 text-gray-600 font-black flex items-center justify-center transition-colors active:scale-95"
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 마피아 게임 설정 -->
+          <div>
+            <h3 class="text-sm font-black text-indigo-800 mb-3 flex items-center gap-2">
+                마피아 게임
+            </h3>
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              <div v-for="s in settings.filter(s => ['score_boss_kill', 'score_troll_win'].includes(s.key))" :key="s.key" class="bg-white rounded-2xl p-4 shadow-sm">
+                <label class="block text-xs font-bold text-gray-400 mb-3 uppercase truncate" :title="s.key">
+                  {{ s.key === 'score_boss_kill' ? '상대 팀 보스 처치' : '트롤 승' }}
+                </label>
+                <div class="flex items-center gap-2">
+                  <button
+                    @click="updateSetting(s.key, s.value - 10)"
+                    class="w-8 h-8 rounded-lg bg-gray-50 border hover:bg-gray-100 text-gray-600 font-black flex items-center justify-center transition-colors active:scale-95"
+                  >
+                    −
+                  </button>
+                  <input
+                    type="number"
+                    :value="s.value"
+                    step="10"
+                    @change="updateSetting(s.key, parseInt(($event.target as HTMLInputElement).value))"
+                    class="flex-1 w-full text-center px-1 bg-transparent border-none font-black text-lg text-indigo-600 outline-none appearance-none"
+                    style="-moz-appearance: textfield;"
+                  />
+                  <button
+                    @click="updateSetting(s.key, s.value + 10)"
+                    class="w-8 h-8 rounded-lg bg-gray-50 border hover:bg-gray-100 text-gray-600 font-black flex items-center justify-center transition-colors active:scale-95"
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         </div>

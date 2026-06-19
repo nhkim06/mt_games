@@ -3,7 +3,7 @@ import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { supabase } from '../supabase'
 import { useAuthStore } from '../stores/auth'
-import { ROOM_STATUS, ROLES, TARGET_TYPES, MESSAGES, MAFIA_QUESTIONS, SCORES } from '../constants'
+import { ROOM_STATUS, ROLES, TARGET_TYPES, MESSAGES, MAFIA_QUESTIONS } from '../constants'
 import { subscribeRoom } from '../lib/realtime'
 import {
   processNightKills,
@@ -27,6 +27,7 @@ const selection = ref('')
 const submitting = ref(false)
 const roleVisible = ref(false)
 const nightQuestion = ref('')
+const scores = ref<Record<string, number>>({})
 
 const me = computed(() => users.value.find((u) => u.id === authStore.user?.id))
 const myRole = computed(() => me.value?.role)
@@ -91,13 +92,22 @@ const winnerTeam = computed(() => {
 })
 
 const fetchData = async () => {
-  const { data: roomData } = await supabase.from('room').select('*').eq('id', roomId).maybeSingle()
+  const [{ data: roomData }, { data: settingsData }] = await Promise.all([
+    supabase.from('room').select('*').eq('id', roomId).maybeSingle(),
+    supabase.from('settings').select('*')
+  ])
+  
   if (!roomData) {
     alert('방이 초기화되었습니다.')
     router.replace({ name: 'lobby' })
     return
   }
   room.value = roomData
+  
+  // 설정 로드
+  const newScores: Record<string, number> = {}
+  settingsData?.forEach(s => newScores[s.key] = s.value)
+  scores.value = newScores
 
   if (roomData.status === ROOM_STATUS.WAITING) {
     router.replace({ name: 'room', params: { id: roomId } })
@@ -189,7 +199,7 @@ const resolveIfAllVotedNight = async () => {
     const { data: latestUsers } = await supabase.from('user').select('*').eq('room_id', roomId)
     const victory = checkMafiaVictory(latestUsers || [])
     if (victory.winnerTeamId) {
-      await finishWithWinner(victory.winnerTeamId, SCORES.BOSS_KILL)
+      await finishWithWinner(victory.winnerTeamId, scores.value['score_boss_kill'] || 10)
     }
   }
 }
@@ -242,7 +252,7 @@ const resolveIfAllVotedPlatform = async () => {
 
     // 처형당한 사람이 트롤이면 트롤 승
     if (executedUser?.role === ROLES.TROLL && executedUser.team_id) {
-      await finishWithWinner(executedUser.team_id, SCORES.TROLL_WIN)
+      await finishWithWinner(executedUser.team_id, scores.value['score_troll_win'] || 20)
       return
     }
   }
@@ -251,7 +261,7 @@ const resolveIfAllVotedPlatform = async () => {
   const { data: latestUsers } = await supabase.from('user').select('*').eq('room_id', roomId)
   const victory = checkMafiaVictory(latestUsers || [])
   if (victory.winnerTeamId) {
-    await finishWithWinner(victory.winnerTeamId, SCORES.BOSS_KILL)
+    await finishWithWinner(victory.winnerTeamId, scores.value['score_boss_kill'] || 10)
     return
   }
 
@@ -259,73 +269,6 @@ const resolveIfAllVotedPlatform = async () => {
   await advanceToNight('PROCESSING_PLATFORM')
 }
 
-const submitAction = async (targetType: string, candidateId: string) => {
-  if (submitting.value || !isAlive.value) return
-  submitting.value = true
-  try {
-    await supabase.from('votes').insert({
-      room_id: roomId,
-      round: room.value.current_round,
-      voter_id: authStore.user?.id,
-      voter_team_id: me.value?.team_id,
-      target_type: targetType,
-      candidate_id: candidateId
-    })
-    await supabase.from('user').update({ is_voted: true }).eq('id', authStore.user?.id)
-    await fetchData()
-  } catch (e) {
-    console.error(e)
-  } finally {
-    submitting.value = false
-    selection.value = ''
-  }
-}
-
-const goLobby = async () => {
-  if (authStore.user) {
-    await supabase
-      .from('user')
-      .update({ room_id: null, team_id: null, role: null, is_voted: false, is_alive: true })
-      .eq('id', authStore.user.id)
-    authStore.user.room_id = undefined
-    authStore.user.team_id = undefined
-    authStore.user.role = null
-  }
-  router.replace({ name: 'lobby' })
-}
-
-// 리셋: 같은 방 모든 인원을 내보내고 방 삭제
-const resetRoom = async () => {
-  if (!confirm(MESSAGES.RESET_CONFIRM)) return
-  await supabase
-    .from('user')
-    .update({ room_id: null, team_id: null, role: null, is_voted: false, is_alive: true })
-    .eq('room_id', roomId)
-  await supabase.from('room').delete().eq('id', roomId) // team/votes는 ON DELETE CASCADE
-  router.replace({ name: 'lobby' })
-}
-
-let unsubscribe: (() => void) | null = null
-let poll: ReturnType<typeof setInterval> | null = null
-onMounted(() => {
-  fetchData()
-  unsubscribe = subscribeRoom(roomId, () => fetchData())
-  poll = setInterval(fetchData, 3000)
-})
-onUnmounted(() => {
-  if (unsubscribe) unsubscribe()
-  if (poll) clearInterval(poll)
-})
-
-const getRoleLabel = (role: string) => {
-  switch(role) {
-    case ROLES.BOSS: return '보스 👑'
-    case ROLES.MAFIA: return '마피아 🔫'
-    case ROLES.RIGHT_HAND: return '오른팔 🛡️'
-    case ROLES.TROLL: return '트롤 🤡'
-    default: return '시민 🙂'
-  }
-}
 </script>
 
 <template>
