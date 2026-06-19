@@ -193,15 +193,21 @@ const joinRoom = async (roomId: string) => {
 }
 
 const resumeActiveRoom = async () => {
-  if (!authStore.user?.room_id) return
+  const roomId = authStore.user?.room_id
+  if (!roomId) return
+
   const { data } = await supabase
     .from('room')
-    .select('id, status')
-    .eq('id', authStore.user.room_id)
+    .select('status')
+    .eq('id', roomId)
     .maybeSingle()
+  
   if (!data) return
-  if (data.status === ROOM_STATUS.PLAYING || data.status === ROOM_STATUS.RESULT) {
-    router.push({ name: 'game', params: { id: data.id } })
+
+  if (data.status === ROOM_STATUS.WAITING) {
+    router.push(`/room/${roomId}`)
+  } else {
+    router.push(`/game/${roomId}`)
   }
 }
 
@@ -229,6 +235,16 @@ onUnmounted(() => {
   <div class="flex-1 flex flex-col p-6 max-w-4xl mx-auto w-full">
     <div class="flex justify-between items-center mb-8">
       <h1 class="text-2xl font-black text-gray-800">로비</h1>
+      
+      <!-- 기존 로비 상단 영역 유지, 아래 버튼 추가 -->
+      <button
+        v-if="authStore.user?.room_id"
+        @click="resumeActiveRoom"
+        class="bg-green-600 hover:bg-green-700 text-white text-sm font-black py-2 px-4 rounded-xl shadow-sm transition-colors animate-pulse"
+      >
+        참여 중인 게임 입장하기
+      </button>
+
       <div class="flex items-center gap-2 sm:gap-3">
         <span class="text-gray-600 font-bold text-sm sm:text-base">{{ authStore.user?.name }}</span>
         <button
