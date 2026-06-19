@@ -269,6 +269,76 @@ const resolveIfAllVotedPlatform = async () => {
   await advanceToNight('PROCESSING_PLATFORM')
 }
 
+// 역할 한글 라벨
+const ROLE_LABELS: Record<string, string> = {
+  [ROLES.BOSS]: '보스',
+  [ROLES.MAFIA]: '마피아',
+  [ROLES.RIGHT_HAND]: '오른팔',
+  [ROLES.TROLL]: '트롤',
+  [ROLES.CITIZEN]: '시민'
+}
+const getRoleLabel = (role: string | null | undefined) =>
+  (role && ROLE_LABELS[role]) || '??????'
+
+// 행동/투표 제출: 한 건의 vote를 기록하고 본인을 제출 완료로 표시한다.
+const submitAction = async (targetType: string, candidateId: string | null) => {
+  if (submitting.value || !authStore.user) return
+  submitting.value = true
+  try {
+    await supabase.from('votes').insert({
+      room_id: roomId,
+      round: room.value.current_round,
+      voter_id: authStore.user.id,
+      voter_team_id: me.value?.team_id ?? null,
+      target_type: targetType,
+      candidate_id: candidateId
+    })
+    await supabase.from('user').update({ is_voted: true }).eq('id', authStore.user.id)
+    selection.value = ''
+    await fetchData()
+  } catch (e) {
+    console.error(e)
+    alert('제출 중 오류가 발생했습니다.')
+  } finally {
+    submitting.value = false
+  }
+}
+
+const resetRoom = async () => {
+  if (!confirm(MESSAGES.RESET_CONFIRM)) return
+  await supabase
+    .from('user')
+    .update({ room_id: null, team_id: null, role: null, is_voted: false })
+    .eq('room_id', roomId)
+  await supabase.from('room').delete().eq('id', roomId)
+  router.replace({ name: 'lobby' })
+}
+
+const goLobby = async () => {
+  if (authStore.user) {
+    await supabase
+      .from('user')
+      .update({ room_id: null, team_id: null, role: null, is_voted: false })
+      .eq('id', authStore.user.id)
+    authStore.user.room_id = undefined
+    authStore.user.team_id = undefined
+    authStore.user.role = null
+  }
+  router.replace({ name: 'lobby' })
+}
+
+let unsubscribe: (() => void) | null = null
+let poll: ReturnType<typeof setInterval> | null = null
+onMounted(() => {
+  fetchData()
+  unsubscribe = subscribeRoom(roomId, () => fetchData())
+  poll = setInterval(fetchData, 3000)
+})
+onUnmounted(() => {
+  if (unsubscribe) unsubscribe()
+  if (poll) clearInterval(poll)
+})
+
 </script>
 
 <template>

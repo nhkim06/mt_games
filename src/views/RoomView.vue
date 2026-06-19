@@ -125,19 +125,25 @@ const toggleReady = async () => {
 const startGame = async () => {
   if (starting.value || !canStart.value) return
   starting.value = true
+  console.log('startGame - Starting game process...')
   try {
-    // 조건부 업데이트로 WAITING -> PLAYING 전환을 한 명만 성공시킨다.
-    // 마피아는 밤부터 시작, 라이어는 PLAYING(낮)부터 시작
     const nextStatus = isMafiaGame.value ? ROOM_STATUS.MAFIA_NIGHT : ROOM_STATUS.PLAYING
     
-    const { data: claimed } = await supabase
+    console.log('startGame - Updating room status to:', nextStatus)
+    const { data: claimed, error: updateError } = await supabase
       .from('room')
       .update({ status: nextStatus })
       .eq('id', roomId)
       .eq('status', ROOM_STATUS.WAITING)
       .select()
 
+    if (updateError) {
+      console.error('startGame - Room update error:', updateError)
+      throw updateError
+    }
+
     if (claimed && claimed.length > 0) {
+      console.log('startGame - Room status updated successfully, assigning roles...')
       let roleUpdates: { id: string; role: string }[] = []
       
       if (isLiarGame.value) {
@@ -166,11 +172,16 @@ const startGame = async () => {
         )
       )
       await supabase.from('votes').delete().eq('room_id', roomId)
+      console.log('startGame - Roles assigned successfully.')
+      router.replace({ name: 'game', params: { id: roomId } })
+    } else {
+      console.warn('startGame - Failed to claim the room update (someone else might have started it).')
     }
   } catch (e) {
-    console.error(e)
+    console.error('startGame - Error during game start:', e)
   } finally {
     starting.value = false
+    console.log('startGame - Process finished.')
   }
 }
 
