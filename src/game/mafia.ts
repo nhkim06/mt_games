@@ -33,15 +33,15 @@ export function assignMafiaRoles(teams: TeamRow[], users: UserRow[]): { id: stri
     const members = users.filter((u) => u.team_id === team.id)
     if (members.length === 0) continue
     
+    // 팀원들을 무작위로 섞음
     const shuffled = [...members].sort(() => Math.random() - 0.5)
     
+    // 역할 정의 (우선순위: BOSS > MAFIA > RIGHT_HAND > TROLL)
+    const specialRoles = [ROLES.BOSS, ROLES.MAFIA, ROLES.RIGHT_HAND, ROLES.TROLL]
+    
     shuffled.forEach((m, i) => {
-      let role: string = ROLES.CITIZEN
-      if (i === 0) role = ROLES.BOSS
-      else if (i === 1) role = ROLES.MAFIA
-      else if (i === 2) role = ROLES.RIGHT_HAND
-      else if (i === 3) role = ROLES.TROLL
-      
+      // 인덱스가 특수 역할 개수보다 작으면 해당 역할 부여, 아니면 시민
+      let role: string = i < specialRoles.length ? specialRoles[i] : ROLES.CITIZEN
       updates.push({ id: m.id, role })
     })
   }
