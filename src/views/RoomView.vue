@@ -36,7 +36,7 @@ const membersOf = (teamId: string) => users.value.filter((u) => u.team_id === te
 const isLiarGame = computed(() => room.value?.game_type === GAME_TYPES.LIAR)
 const isMafiaGame = computed(() => room.value?.game_type === GAME_TYPES.MAFIA)
 // 모든 참여자가 준비 완료를 눌러야 게임 시작 버튼이 활성화된다.
-const canStart = computed(() => users.length > 0 && users.value.every((u) => u.is_voted))
+const canStart = computed(() => users.value.length > 0 && users.value.every((u) => u.is_voted))
 
 const fetchData = async () => {
   const { data: roomData } = await supabase.from('room').select('*').eq('id', roomId).maybeSingle()
