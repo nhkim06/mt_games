@@ -41,8 +41,7 @@ const canStart = computed(() => users.value.length > 0 && users.value.every((u) 
 const fetchData = async () => {
   const { data: roomData } = await supabase.from('room').select('*').eq('id', roomId).maybeSingle()
   if (!roomData) {
-    alert('방이 존재하지 않습니다.')
-    router.replace({ name: 'lobby' })
+    router.replace({ name: 'not-found' })
     return
   }
   room.value = roomData

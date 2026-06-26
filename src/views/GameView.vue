@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { supabase } from '../supabase'
 import { GAME_TYPES } from '../constants'
 import LiarGameView from './LiarGameView.vue'
 import MafiaGameView from './MafiaGameView.vue'
 
 const route = useRoute()
+const router = useRouter()
 const roomId = route.params.id as string
 const gameType = ref<string | null>(null)
 const loading = ref(true)
@@ -20,6 +21,9 @@ const fetchData = async () => {
   
   if (roomData) {
     gameType.value = roomData.game_type
+  } else {
+    router.replace({ name: 'not-found' })
+    return
   }
   loading.value = false
 }
