@@ -81,7 +81,7 @@ const saveSettings = async () => {
 
 const fetchRooms = async () => {
   loading.value = true
-  let query = supabase.from('room').select('*').order('id')
+  let query = supabase.from('room').select('*').order('name')
   
   // 종료된 게임은 로비에서 보이지 않게 필터링
   query = query.neq('status', ROOM_STATUS.FINISHED)

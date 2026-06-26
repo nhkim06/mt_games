@@ -78,7 +78,7 @@ const createRoom = async () => {
 
 const fetchRooms = async () => {
   const [{ data: roomData }, { data: teamData }, { data: settingsData }] = await Promise.all([
-    supabase.from('room').select('*, user(*)').order('status', { ascending: false }),
+    supabase.from('room').select('*, user(*)').order('name'),
     supabase.from('team').select('*').order('team_name'),
     supabase.from('settings').select('*')
   ])
